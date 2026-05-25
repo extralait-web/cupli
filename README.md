@@ -7,8 +7,8 @@
 
 <p align="center">
 
-<a href="https://github.com/extralait-web/cupli/actions?query=event%3Apush+branch%3Amain+workflow%3ACI" target="_blank">
-    <img src="https://img.shields.io/github/actions/workflow/status/extralait-web/cupli/ci.yml?branch=main&logo=github&label=CI" alt="CI">
+<a href="https://github.com/extralait-web/cupli/actions?query=event%3Apush+branch%3Amaster+workflow%3ACI" target="_blank">
+    <img src="https://img.shields.io/github/actions/workflow/status/extralait-web/cupli/ci.yml?branch=master&logo=github&label=CI" alt="CI">
 </a>
 <a href="https://pypi.python.org/pypi/cupli" target="_blank">
     <img src="https://img.shields.io/pypi/v/cupli.svg" alt="pypi">
@@ -19,7 +19,7 @@
 <a href="https://github.com/extralait-web/cupli" target="_blank">
     <img src="https://img.shields.io/pypi/pyversions/cupli.svg" alt="versions">
 </a>
-<a href="https://github.com/extralait-web/cupli/blob/main/LICENSE" target="_blank">
+<a href="https://github.com/extralait-web/cupli/blob/master/LICENSE" target="_blank">
     <img src="https://img.shields.io/github/license/extralait-web/cupli.svg" alt="license">
 </a>
 
@@ -60,9 +60,8 @@ on `docker compose` without replacing it.
 5. [CLI reference](#cli-reference)
 6. [Recipes](#recipes)
 7. [IDE setup](#ide-setup)
-8. [Comparison with similar tools](#comparison-with-similar-tools)
-9. [Limitations](#limitations)
-10. [Troubleshooting + error codes](#troubleshooting--error-codes)
+8. [Limitations](#limitations)
+9. [Troubleshooting + error codes](#troubleshooting--error-codes)
 
 ---
 
@@ -674,26 +673,6 @@ do it.
 
 ---
 
-## Comparison with similar tools
-
-|  | cupli | docker compose | Tilt | Skaffold | Garden | Dip |
-|---|---|---|---|---|---|---|
-| Multi-repo | ✓ | — | partial | — | ✓ | — |
-| Spec format | YAML | YAML | Tiltfile (Python) | YAML | YAML | YAML |
-| docker-compose | ✓ | ✓ | partial | partial | ✓ | ✓ |
-| Kubernetes | — | — | ✓ | ✓ | ✓ | — |
-| UI / dashboard | basic | — | rich | basic | rich | — |
-| Mount toggling | ✓ | — | — | — | — | — |
-| Cross-repo git | ✓ | — | — | — | — | — |
-| Branch pinning + drift | ✓ | — | — | — | — | — |
-| Live reload | via compose watch | partial | rich | ✓ | ✓ | — |
-
-Cupli's niche: docker-compose-first multi-repo workspaces. If you're on
-Kubernetes locally, Tilt or Garden are better. If everything's in one
-repo, plain `docker compose` + `make` is fine.
-
----
-
 ## Limitations
 
 * **One project at a time.** A `space.cupli.yaml` maps to exactly one
@@ -730,18 +709,3 @@ repo, plain `docker compose` + `make` is fine.
 
 For `cupli space doctor` and `cupli config` errors, the output now
 includes a per-field summary with source locations.
-
----
-
-## Contributing
-
-```bash
-git clone https://github.com/<user>/cupli && cd cupli
-uv sync
-make             # lint + tests
-make test
-make schema      # regenerate space.schema.json
-```
-
-Conventions: see [`AGENTS.md`](AGENTS.md) (for AI agents) and the
-inline doctests / docstrings.
