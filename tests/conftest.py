@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Neutralise ANSI colouring before any cupli (and rich) modules are imported.
+# CI sets ``FORCE_COLOR=1`` for human-readable build logs, which makes rich
+# emit escape sequences that break substring assertions on captured stdout.
+os.environ.pop("FORCE_COLOR", None)
+os.environ.setdefault("NO_COLOR", "1")
 
 TESTS_DIR = Path(__file__).parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"

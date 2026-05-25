@@ -8,6 +8,7 @@ lockfile is overwritten without raising.
 from __future__ import annotations
 
 import os
+import sys
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -22,11 +23,40 @@ def _pid_alive(pid: int) -> bool:
     """Return True when ``pid`` belongs to a live process visible to this user."""
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows-native liveness check.
+
+    ``os.kill(pid, 0)`` on Windows is not a presence probe — CPython routes
+    signal ``0`` to ``GenerateConsoleCtrlEvent(CTRL_C_EVENT, pid)``, which
+    sends ``Ctrl+C`` to a console process group and can interrupt the
+    calling process instead of returning a boolean. Probe through
+    ``OpenProcess`` + ``GetExitCodeProcess`` to distinguish a live process
+    from a finished one whose kernel object is still cached.
+    """
+    import ctypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = ctypes.c_ulong(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 @contextmanager

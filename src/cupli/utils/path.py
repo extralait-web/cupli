@@ -25,11 +25,12 @@ def create_dir(path: Path | str) -> None:
 
 
 def create_file(path: Path | str) -> None:
-    """Touch a file with mode ``0o755`` if missing."""
+    """Touch a file with mode ``0o755`` if missing, creating parents as needed."""
     from pathlib import Path as _Path
 
     target = _Path(path)
     if not target.exists():
+        target.parent.mkdir(parents=True, mode=0o755, exist_ok=True)
         target.touch(mode=0o755)
 
 

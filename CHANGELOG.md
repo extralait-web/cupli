@@ -1,3 +1,38 @@
+# v0.1.1
+
+Hotfix release on top of v0.1.0 to make CI green on a fresh runner and on
+the full ubuntu / macos / windows × py3.10–3.13 matrix.
+
+## Fixes
+
+* **`create_file` now creates parent directories.** The per-user spaces
+  registry at `${XDG_CONFIG_HOME:-~/.config}/cupli/spaces.json` was being
+  touched without ensuring `cupli/` existed first, which made
+  `cupli ... graph`, `examples-validate`, and ~70 unit/CLI tests fail on
+  any machine that had never had `~/.config/cupli/`.
+* **Test suite no longer relies on `FORCE_COLOR=0`.** A top-level
+  `conftest.py` now pops `FORCE_COLOR` and sets `NO_COLOR=1` before any
+  cupli module is imported, so rich-formatted output does not inject ANSI
+  escape sequences that break substring assertions on captured stdout.
+* **Windows compatibility in path assertions.** Loader tests that match
+  computed `*_PATH` vars with a literal forward-slash suffix now normalise
+  through `Path(...).as_posix()` so they pass under `WindowsPath`.
+* **`install_hooks` chmod check skipped on Windows.** Windows file
+  systems do not model POSIX executable bits, so the
+  `st_mode & 0o111` assertion is `@pytest.mark.skipif` on `win32`.
+* **`_pid_alive` uses `OpenProcess` on Windows.** CPython routes
+  `os.kill(pid, 0)` to `GenerateConsoleCtrlEvent(CTRL_C_EVENT, pid)`
+  on Windows, which actively sends `Ctrl+C` to a process group instead
+  of probing liveness — that interrupted the test session as soon as
+  the lock module checked an unknown PID. The Windows path now opens
+  the process with `PROCESS_QUERY_LIMITED_INFORMATION` and inspects
+  the exit code via `GetExitCodeProcess`.
+* **Registry prefix detection accepts both separators.** The longest-
+  prefix matcher hard-coded `/` as the directory delimiter, so
+  `detect_current_space` could not locate a registered space from a
+  Windows `cwd` under it. Both `/` and `os.sep` are now treated as
+  valid separators.
+
 # v0.1.0
 
 Initial release.

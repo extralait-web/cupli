@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from cupli.core.loader import COMPONENT_RESERVED, SPACE_RESERVED, load_space
 from cupli.domain.errors import CupliError
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def _posix(value: str) -> str:
+    """Return ``value`` with forward slashes so suffix asserts match on Windows."""
+    return Path(value).as_posix()
 
 
 def _write_space(target: Path, contents: str) -> Path:
@@ -29,10 +31,10 @@ def test_space_auto_vars_populated(tmp_path: Path) -> None:
     assert resolved.space.name == "tiny"
     assert resolved.space_vars["SPACE_NAME"] == "tiny"
     assert resolved.space_vars["SPACE_PATH"] == str(tmp_path.resolve())
-    assert resolved.space_vars["APPS_PATH"].endswith("/apps")
-    assert resolved.space_vars["BASES_PATH"].endswith("/bases")
-    assert resolved.space_vars["MOUNTS_PATH"].endswith("/mounts")
-    assert resolved.space_vars["LOCALS_PATH"].endswith("/.locals")
+    assert _posix(resolved.space_vars["APPS_PATH"]).endswith("/apps")
+    assert _posix(resolved.space_vars["BASES_PATH"]).endswith("/bases")
+    assert _posix(resolved.space_vars["MOUNTS_PATH"]).endswith("/mounts")
+    assert _posix(resolved.space_vars["LOCALS_PATH"]).endswith("/.locals")
     assert resolved.space_vars["NETWORK"] == "tiny"
     assert resolved.space_vars["COMPOSE_PROJECT_NAME"] == "tiny"
 
@@ -48,7 +50,7 @@ def test_app_path_defaults_to_apps_dir(tmp_path: Path) -> None:
     assert api.path == (tmp_path / "src" / "apps" / "api").resolve()
     assert api.vars["APP_NAME"] == "api"
     assert api.vars["APP_PATH"] == str(api.path)
-    assert api.vars["APP_LOCAL_PATH"].endswith("/.locals/api")
+    assert _posix(api.vars["APP_LOCAL_PATH"]).endswith("/.locals/api")
 
 
 def test_app_path_uses_explicit_value(tmp_path: Path) -> None:

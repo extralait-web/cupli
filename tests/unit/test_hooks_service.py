@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
+
+import pytest
 
 from cupli.core.loader import load_space
 from cupli.domain.consts import HOOK_MARKER
@@ -64,6 +67,10 @@ def test_build_shim_includes_marker(tmp_path: Path) -> None:
     assert "command -v cupli" in body
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX executable bits are not modelled on Windows filesystems",
+)
 def test_install_hooks_creates_shims_with_chmod(tmp_path: Path) -> None:
     """``install_hooks`` writes executable shims under each target's .git/hooks."""
     space_file = _write_space(tmp_path)

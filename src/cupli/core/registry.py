@@ -240,10 +240,16 @@ def _longest_matching_space(
 
 
 def _path_starts_with(cwd_str: str, root_str: str) -> bool:
-    """True when ``cwd_str`` is exactly ``root_str`` or a child path."""
+    r"""True when ``cwd_str`` is exactly ``root_str`` or a child path.
+
+    Path separators differ across platforms (``/`` on POSIX, ``\`` on
+    Windows), so both are accepted when delimiting the parent from its
+    children.
+    """
     if cwd_str == root_str:
         return True
-    return cwd_str.startswith(root_str.rstrip("/") + "/")
+    trimmed = root_str.rstrip("/\\")
+    return cwd_str.startswith((trimmed + os.sep, trimmed + "/"))
 
 
 def _scan_cwd_for_space_file(cwd: Path) -> Path | None:
