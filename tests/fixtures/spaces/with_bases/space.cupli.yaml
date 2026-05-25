@@ -1,0 +1,22 @@
+name: with-bases
+cupli_min: 0.1.0
+
+bases:
+  python_runtime:
+    vars:
+      PYTHONUNBUFFERED: "1"
+  pg_client:
+    vars:
+      PGCONNECT_TIMEOUT: "5"
+
+apps:
+  api:
+    bases: [python_runtime, pg_client]
+    deps:
+      worker: [default]
+    tags: [backend]
+    mode: up
+  worker:
+    bases: [python_runtime]
+    tags: [backend]
+    mode: up

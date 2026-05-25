@@ -1,0 +1,4 @@
+name: bad-version
+cupli_min: "not.a.version"
+apps:
+  api: {}

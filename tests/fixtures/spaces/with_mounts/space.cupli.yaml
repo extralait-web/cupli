@@ -1,0 +1,22 @@
+name: with-mounts
+
+apps:
+  api:
+    repo: git@github.com:example/api.git
+    tags: [backend]
+  migrate:
+    repo: git@github.com:example/migrate.git
+    mode: oneshot
+
+mounts:
+  sdk:
+    repo: git@github.com:example/sdk.git
+    hosted_in: [api, migrate]
+    exec_path: /opt/sdk
+    mode: rw
+
+commands:
+  lint:
+    container: api
+    run: ruff check .
+    help: Run ruff over the api source tree.

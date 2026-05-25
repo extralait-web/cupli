@@ -1,0 +1,713 @@
+<p align="center">
+  <img src="docs/resources/brand.svg" width="100%" alt="cupli">
+</p>
+<p align="center">
+    <em>Оркестратор multi-repository docker-compose окружений. Один YAML, одна команда <code>cupli up</code> — весь стек поднят.</em>
+</p>
+
+<p align="center">
+
+<a href="https://github.com/extralait-web/cupli/actions?query=event%3Apush+branch%3Amain+workflow%3ACI" target="_blank">
+    <img src="https://img.shields.io/github/actions/workflow/status/extralait-web/cupli/ci.yml?branch=main&logo=github&label=CI" alt="CI">
+</a>
+<a href="https://pypi.python.org/pypi/cupli" target="_blank">
+    <img src="https://img.shields.io/pypi/v/cupli.svg" alt="pypi">
+</a>
+<a href="https://pepy.tech/project/cupli" target="_blank">
+    <img src="https://static.pepy.tech/badge/cupli/month" alt="downloads">
+</a>
+<a href="https://github.com/extralait-web/cupli" target="_blank">
+    <img src="https://img.shields.io/pypi/pyversions/cupli.svg" alt="versions">
+</a>
+<a href="https://github.com/extralait-web/cupli/blob/main/LICENSE" target="_blank">
+    <img src="https://img.shields.io/github/license/extralait-web/cupli.svg" alt="license">
+</a>
+
+</p>
+
+> 🇬🇧 [README in English](README.md)
+
+`cupli` нужен, когда каждый компонент проекта (backend, frontend,
+worker, общий SDK, инфра) живёт в **отдельном git-репозитории**, но
+весь стек надо одним движением поднять локально. Cupli — обёртка над
+`docker compose`, не его замена.
+
+* **Спека-first.** Один `space.cupli.yaml` описывает всё: репозитории,
+  bases, mounts, services, ярлыки.
+* **Inline или внешний compose.** Декларируй сервисы прямо в YAML или
+  ссылайся на готовый `docker-compose.yml`. Можно совмещать.
+* **Multi-repo git.** `cupli git status / pull / fetch / checkout`
+  параллельно работают по всем клонированным компонентам, с фильтрами
+  по именам и per-repo map для branches.
+* **Scope переменных.** Space → bases (C3) → app, c `${VAR}` и
+  `${VAR:-default}` подстановкой везде.
+* **Pin веток + drift.** `branch: main` на компоненте уважается при
+  `cupli init` (`git clone -b`) и подсвечивается в `cupli git status`,
+  если working tree уехал в другую ветку.
+* **Toggle mounts.** `cupli mounts attach <name>` бинд-маунтит общий
+  SDK в N контейнеров без правки YAML.
+* **Shell completion** для всех имён (apps, services, mounts, tags,
+  shortcuts, коды ошибок).
+
+---
+
+## Содержание
+
+1. [Установка](#установка)
+2. [Quick-start](#quick-start)
+3. [Концепции](#концепции)
+4. [Reference `space.cupli.yaml`](#reference-spacecupliyaml)
+5. [CLI](#cli)
+6. [Рецепты](#рецепты)
+7. [Настройка IDE](#настройка-ide)
+8. [Сравнение с аналогами](#сравнение-с-аналогами)
+9. [Ограничения](#ограничения)
+10. [Troubleshooting + коды ошибок](#troubleshooting--коды-ошибок)
+
+---
+
+## Установка
+
+```bash
+uv tool install cupli                 # рекомендую
+# или
+pipx install cupli
+# или
+pip install --user cupli
+```
+
+Проверка:
+
+```bash
+cupli -V                              # cupli 0.1.0 (удобно для скриптов)
+cupli --version                        # полная инфа: python, platform, deps
+```
+
+Требуется Python ≥ 3.10. `docker` / `docker compose` должны быть в PATH.
+
+### Shell completion
+
+Авто-определение шелла из `$SHELL`:
+
+```bash
+cupli completion install
+```
+
+Или явно:
+
+```bash
+cupli completion install --shell bash      # bash | zsh | fish | pwsh
+cupli completion show --shell zsh > ~/.zsh/completions/_cupli
+```
+
+---
+
+## Quick-start
+
+```bash
+mkdir my-workspace && cd my-workspace
+cupli init --name my-workspace                # каркас space.cupli.yaml + .env + .locals/
+$EDITOR space.cupli.yaml                       # опиши свои apps
+cupli up                                       # build + старт
+cupli ps                                       # что запущено
+cupli logs my-api -f
+cupli down                                     # снести
+```
+
+Минимальный workspace:
+
+```yaml
+# space.cupli.yaml
+schema_version: 1
+name: hello
+
+apps:
+  cache:
+    service:                                   # inline compose-spec
+      image: redis:7-alpine
+      command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+```
+
+```bash
+cupli up
+cupli exec -c cache -- redis-cli ping        # PONG
+```
+
+Тот же workspace с комментариями: [`docs/examples/minimal/`](docs/examples/minimal/).
+
+---
+
+## Концепции
+
+### Space
+
+**Space** — единица, с которой работает cupli: один
+`space.cupli.yaml`, один проект, один docker-compose project. У space
+есть `name:` — он же имя docker-compose project'а и имя сети по
+умолчанию.
+
+### App
+
+**App** — то, что cupli стартует/стопит. Каждый app биндится к одному
+или нескольким compose-сервисам. Связывание объявляется одной из
+четырёх форм:
+
+1. Неявно — имя сервиса = имя app'а.
+2. `service: "name"` — биндинг к существующему compose-сервису по имени.
+3. `service: {image: ..., command: ..., ...}` — *inline*
+   single-service spec, без отдельного compose-файла.
+4. `services: { name1: {...}, name2: {...} }` — compound app с
+   несколькими compose-сервисами (например: api + celery workers + beat).
+
+В формах 3 и 4 dict принимает **любые** docker-compose-атрибуты
+сервиса (`image`, `build`, `command`, `environment`, `depends_on`,
+`healthcheck`, `volumes`, `restart`, …). Cupli резервирует `vars` и
+`ports` для своих инъекций; всё остальное передаётся docker-compose
+дословно через сгенерированный `docker-compose.inline.yml`.
+
+### Base
+
+**Base** — переиспользуемый шаблон. App'ы цитируют bases через
+`bases: [name1, name2]` и наследуют `vars:`, `envs:`, `composes:`,
+`repo:` в C3 порядке линеаризации. Bases убирают boilerplate.
+
+### Mount
+
+**Mount** — host-to-container bind, который можно включать/выключать
+без правки YAML. Полезно для hot-swap общего SDK на локальный чекаут.
+`cupli mounts attach/detach <name>` переключает состояние.
+
+### Service
+
+**Service** в cupli — это то же, что docker-compose называет service:
+декларация контейнера. App владеет сервисами; один app может владеть
+несколькими.
+
+### Реестр workspace'ов
+
+Spaces регистрируются в `~/.config/cupli/spaces.json`, можно
+обращаться по имени откуда угодно:
+
+```bash
+cupli workspace add -n shop -f ~/work/shop/space.cupli.yaml
+cupli -s shop up
+cupli workspace select shop                 # sticky: следующие вызовы → shop
+cupli workspace unselect                    # вернуть cwd-detect
+```
+
+---
+
+## Reference `space.cupli.yaml`
+
+Полный референс лежит в [`space.cupli.yaml`](space.cupli.yaml) в корне
+и копией в [`docs/examples/full-reference/`](docs/examples/full-reference/).
+Ниже — схема с однострочниками.
+
+### Top-level
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `schema_version` | int | — | Pin версии. Поддерживается только `1`. |
+| `name` | string | — | Идентификатор. Используется как имя docker-compose project'а и имя сети по умолчанию. Регекс: `^[A-Za-z][A-Za-z0-9_-]*$`. |
+| `cupli_min` / `cupli_max` | string \| `"*"` | — | Версии cupli. |
+| `extends` | string | — | Путь к родительскому space (один уровень в v1). |
+| `envs` | list[string] | `[]` | `.env`-файлы space-scope, до `vars`. |
+| `vars` | map[str, str] | `{}` | Space-scope переменные; видны везде; пишутся в `override.env` для docker-compose substitution. |
+| `bases` | map[str, base] | `{}` | Переиспользуемые шаблоны. |
+| `apps` | map[str, app] | `{}` | Run units. |
+| `mounts` | map[str, mount] | `{}` | Toggleable bind-mounts. |
+| `hooks` | map[str, hook-override] | `{}` | Per-target тюнинг для `cupli hooks install`. |
+| `commands` | map[str, command-shortcut] | `{}` | `cupli sc <name>` / `cupli <name>` (с `top_level: true`). |
+| `networks` | map[str, dict] | `{}` | Top-level docker-compose `networks:`. Значения — compose-spec дословно (`driver`, `name`, `ipam`, …). Дефолтная сеть `default` добавляется автоматически. |
+
+### `bases.<name>`
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `path` | string | `${BASES_PATH}/<name>` | Расположение на диске. |
+| `repo` | string | — | Git URL (опустить — in-place base). |
+| `branch` | string | — | Ветка для clone (`git clone -b <branch>`). |
+| `post_clone` | string | — | Shell-команда после успешного clone. |
+| `init_vars` | map | `{}` | Env, экспортированный в clone + `post_clone`. |
+| `vars` | map | `{}` | Переменные, передающиеся в inheriting apps. |
+| `envs` | list[string] | `[]` | Env-файлы base-scope. |
+| `composes` | list[string] | `[]` | Compose-фрагменты, prepend'ятся в COMPOSE_FILE цепочку inheriting app'ов. |
+
+### `apps.<name>`
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `path` | string | `${APPS_PATH}/<name>` | Расположение на диске. |
+| `repo` | string | — | Git URL. |
+| `branch` | string | — | Ветка для clone. `cupli git status` подсвечивает drift. |
+| `post_clone` | string | — | Shell-команда после clone. |
+| `init_vars` | map | `{}` | Env для clone + `post_clone`. |
+| `bases` | list[string] | `[]` | Bases (C3 multi-inherit). |
+| `deps` | map[str, list[modes]] | `{}` | Кросс-app `depends_on` (с фильтрами mode). |
+| `tags` | list[string] | `[]` | Для `cupli up --tag <tag>`. |
+| `mode` | enum | `up` | `up` (long-running), `oneshot` (run-once), `disabled`. |
+| `composes` | list[string] | `[]` | Внешние compose-файлы. |
+| `service` | string \| dict | — | Single-service binding. Dict-форма = inline compose-spec. |
+| `services` | map[str, dict] \| list[str] | — | Multi-service map (каждое значение — compose-spec с опциональными cupli-only `vars` и `ports`) либо просто список имён сервисов (эквивалентно map с пустыми override). Несовместимо с `service`. |
+| `vars` | map | `{}` | Переменные; инжектятся как `environment` на каждый managed сервис. |
+| `envs` | list[string] | `[]` | Env-файлы app-scope. |
+| `ports` | list[string] | `[]` | Compose-style port mappings; инжектятся в primary-сервис app'а (или в каждый сервис в `services:`). |
+| `forward_ssh` | bool | `false` | Mount `$SSH_AUTH_SOCK` в контейнер. |
+
+#### Все 4 формы service-binding'а
+
+```yaml
+# 1) Неявная (имя сервиса = имени app'а)
+apps:
+  api: {}
+
+# 2) Строка (rename binding)
+apps:
+  redis:
+    service: agora-redis        # bind к compose-сервису `agora-redis`
+    composes: [./compose.yml]
+
+# 3) Inline single-service (любые docker-compose атрибуты)
+apps:
+  cache:
+    service:
+      image: memcached:1.6
+      command: ["memcached", "-m", "64"]
+      healthcheck: {test: ["CMD", "echo", "stats", "|", "nc", "localhost", "11211"]}
+    vars: {LOG_LEVEL: info}
+    ports: ["11211:11211"]
+
+# 4) services map (один app, N compose-сервисов)
+apps:
+  backend:
+    vars: {DATABASE_URL: ...}   # шарится со всеми сервисами ниже
+    services:
+      backend:
+        image: ${IMAGE}
+        command: [uvicorn, app.main:app]
+      celery-worker:
+        image: ${IMAGE}
+        command: [celery, -A, app.tasks, worker]
+        vars: {CELERY_LOG_LEVEL: info}    # per-service override (merge)
+        ports: []                          # explicit empty: opt out app-level ports
+
+# 4b) services как список — то же самое, что `{name: {}}` для каждого
+apps:
+  fleet:
+    composes: [${APP_PATH}/docker-compose.yml]
+    services:
+      - api
+      - worker
+      - beat
+```
+
+> `${VAR}` внутри inline compose-spec (`service.build.context: ${APP_PATH}`)
+> резолвит **docker-compose**, не cupli. Для пути конкретного компонента
+> используй `${<APP_NAME>_APP_PATH}` (per-component path-var, который cupli
+> пишет в `override.env`). Голое `${APP_PATH}` подставляется только там, где
+> подстановку делает сам cupli (например `composes:`).
+
+### `mounts.<name>`
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `path` | string | `${MOUNTS_PATH}/<name>` | Host-source dir. |
+| `repo` | string | — | Git URL. |
+| `branch` | string | — | Ветка для clone. |
+| `post_clone` | string | — | After-clone host-команда. |
+| `hosted_in` | list[string] | required | App-имена, в каждый сервис которых попадёт bind. |
+| `exec_path` | string | required | Абсолютный POSIX-путь внутри контейнера. |
+| `mode` | enum | `rw` | `rw` \| `ro`. |
+| `mac_volume` | enum | — | macOS volume consistency hint. |
+| `envs` | list[string] | `[]` | Env-файлы. |
+| `vars` | map | `{}` | Переменные. |
+
+### `commands.<name>`
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `container` | string | required | Имя app'а, в primary-сервисе которого выполнится команда. |
+| `run` | string | required | Shell command line. |
+| `workdir` | string | — | Рабочая директория внутри контейнера. |
+| `help` | string | — | Help-строка в `cupli --help`. |
+| `top_level` | bool | `false` | Если true, доступно как `cupli <name>` (помимо `cupli sc <name>`). |
+
+### Auto-vars (доступны для interpolation всегда)
+
+* **Space scope** — `SPACE_NAME`, `SPACE_PATH`, `APPS_DIR`,
+  `APPS_PATH`, `BASES_DIR`, `BASES_PATH`, `MOUNTS_DIR`, `MOUNTS_PATH`,
+  `LOCALS_DIR`, `LOCALS_PATH`, `NETWORK`, `COMPOSE_PROJECT_NAME`.
+* **Per-component** — `<NAME>_APP_PATH` для каждого app,
+  `<NAME>_BASE_PATH` для каждого base, `<NAME>_MOUNT_PATH` для
+  каждого mount. Имя upper-case + `-` → `_`. Видно в YAML И в
+  `override.env`.
+* **App / base** — `APP_NAME`, `APP_PATH`, `APP_LOCAL_PATH` (только apps).
+* **Mount** — `MOUNT_NAME`, `MOUNT_PATH`, `MOUNT_HOST`, `MOUNT_EXEC_PATH`.
+
+Дефолтные пути: `APPS_PATH` = `$SPACE_PATH/src/apps`, аналогично для
+bases и mounts. Override per-component через явный `path:`.
+
+### Правила interpolation
+
+* `${VAR}` и `${VAR:-literal-default}`; bareword `$VAR` НЕ распознаётся.
+* Вложенные `${...}` внутри default'а НЕ поддерживаются — default literal.
+* Циклы → `E014`.
+* Unknown vars → `""` + жёлтый warning. С `--strict-vars` → hard error (`E016`).
+* Shadow reserved auto-var → `E015`, если не передан `--allow-shadow`.
+
+---
+
+## CLI
+
+`cupli --help` показывает всё. Основные:
+
+### Lifecycle
+
+| Команда | Что |
+|---|---|
+| `cupli up [services] [--tag t] [--mode m] [--build] [--pull p]` | `docker compose up`. В качестве `services` можно указывать как имя app'а, так и конкретные compose-сервисы compound app'а из `services:`. |
+| `cupli stop [services] [--tag t]` | `docker compose stop`. |
+| `cupli restart [services] [--tag t] [--hard]` | restart; `--hard` = down+up. |
+| `cupli down [-v] [--images]` | `down --remove-orphans`; опционально volumes + images. |
+| `cupli ps [--tag t]` | таблица сервисов. |
+| `cupli logs [service] [-f]` | per-service или все. |
+| `cupli build [services] [--tag t]` | build images. |
+| `cupli pull [services] [--tag t]` | pull images. |
+| `cupli compose -- <args>` | pass-through к `docker compose`. |
+| `cupli config` | merged compose configuration. |
+| `cupli watch [services]` | `docker compose watch` — для `develop.watch` сервисов. |
+
+`--mode default|hook|full` фильтрует cross-app `deps:` по их mode-list.
+Полезно для dev-vs-prod-style зависимостей: `api: {deps: {redis: [default, full]}}`
+подтянет redis в обоих режимах; `audit: {deps: {redis: [full]}}` пропустит
+его при `--mode default`.
+
+### Exec / run
+
+| Команда | Что |
+|---|---|
+| `cupli exec -c <service> -- <cmd>` | внутри запущенного контейнера. |
+| `cupli run -c <service> -- <cmd>` | one-shot (`run --rm`). |
+| `cupli shell -c <service>` | `/bin/bash` (или `--shell <path>`). |
+| `cupli wrap -c <app> -- <cmd>` | на хосте, с экспортированным env app'а. |
+| `cupli env [-c <app>] [--export]` | резолвленный env. |
+
+### Shortcuts
+
+| Команда | Что |
+|---|---|
+| `cupli sc` | список объявленных `commands:`. |
+| `cupli sc <name> [args]` | запуск shortcut'а. |
+| `cupli <name>` | то же, если `top_level: true`. |
+
+### Workspace
+
+| Команда | Что |
+|---|---|
+| `cupli init [-n name] [--path .] [--force] [--no-sync] [--no-ide]` | scaffold + register. Создаёт `space.cupli.yaml`, `.env`, `.locals/`; `src/apps/`, `src/bases/`, `src/mounts/` появятся лениво, когда `cupli space sync` (или другой use-case) их затребует. |
+| `cupli workspace add -n <name> -f <file>` | зарегистрировать существующий space. |
+| `cupli workspace list` | все зарегистрированные. `*` — активный. |
+| `cupli workspace select <name>` | sticky активный. |
+| `cupli workspace unselect` | сброс (cwd-detect). |
+| `cupli workspace current` | что cupli использует прямо сейчас. |
+| `cupli workspace remove <name>` | убрать из реестра (фс не трогает). |
+| `cupli space sync [--apps/--bases/--mounts] [--pull]` | clone declared repos + опциональный pull. |
+| `cupli space doctor [--strict]` | валидация paths + repos. |
+
+### Git (по всем cloned компонентам)
+
+| Команда | Что |
+|---|---|
+| `cupli git status [targets]` | таблица. `drifted`, если working tree ≠ pinned. |
+| `cupli git pull [targets] [--rebase]` | параллельный pull. |
+| `cupli git fetch [targets]` | параллельный fetch. |
+| `cupli git checkout <branch> [-t target] [-m name=branch]` | switch с per-repo overrides. |
+
+### Mounts
+
+| Команда | Что |
+|---|---|
+| `cupli mounts list` | все mount'ы и их state. |
+| `cupli mounts attach <name>` | bind в `hosted_in` apps. |
+| `cupli mounts detach <name>` | снять bind. |
+
+### Hooks
+
+| Команда | Что |
+|---|---|
+| `cupli hooks install <hooks-dir> [--scope all/apps/bases/mounts] [--target name]` | установить per-target git-hook shim'ы. |
+| `cupli hooks remove [--scope] [--target]` | убрать shim'ы. |
+
+Хук-скрипты под `<hooks-dir>/<hook-name>/*.sh` диспатчатся в контейнер
+target'а. Первая строка переопределяет дефолты:
+
+```bash
+#!/usr/bin/env bash
+# cupli: container=api workdir=/app shell=sh
+echo "запускаюсь внутри контейнера"
+```
+
+`shell=sh` переключает in-container interpreter с `bash` (по умолчанию)
+на POSIX `sh` — пригодится для alpine-образов без `bash`.
+
+### IDE
+
+| Команда | Что |
+|---|---|
+| `cupli ide setup [--target auto/vscode/pycharm/all] [--force]` | пишет JSON-schema mapping'и. `auto` идёт вверх по родителям, ища `.vscode/` / `.idea/` (останавливается на git-repo boundary), и пишет только для найденных editor'ов. |
+
+### Диагностика
+
+| Команда | Что |
+|---|---|
+| `cupli graph` | дерево bases / apps / mounts / commands. |
+| `cupli dashboard [-i interval]` | live status. |
+| `cupli stats [--follow]` | `docker stats` scoped to workspace. |
+| `cupli explain <code>` | reference кодов ошибок. |
+
+---
+
+## Рецепты
+
+### Один inline сервис без compose-файла
+
+```yaml
+schema_version: 1
+name: hello
+apps:
+  cache:
+    service:
+      image: redis:7-alpine
+      command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+```
+
+### Compound app (celery)
+
+```yaml
+apps:
+  backend:
+    vars: {DATABASE_URL: ..., REDIS_URL: ...}
+    services:
+      backend:
+        image: ${IMAGE}
+        command: [uvicorn, app.main:app]
+        ports: ["8000:8000"]
+      celery-worker:
+        image: ${IMAGE}
+        command: [celery, -A, app.tasks, worker]
+        depends_on: [backend]
+      celery-beat:
+        image: ${IMAGE}
+        command: [celery, -A, app.tasks, beat]
+        depends_on: [backend]
+```
+
+Полный файл: [`docs/examples/celery/`](docs/examples/celery/).
+
+### Multi-repo workspace
+
+* `repo:` + `branch:` на каждом app/mount со своим checkout'ом.
+* `cupli init` клонит под `src/apps/<name>`.
+* `cupli git status` агрегирует состояние.
+
+Полный файл: [`docs/examples/multi-repo-shop/`](docs/examples/multi-repo-shop/).
+
+### Rename compose-сервиса
+
+```yaml
+apps:
+  redis:
+    service: agora-redis             # compose-фрагмент называет его agora-redis
+    composes: [./compose.yml]
+```
+
+### Hot-swap вендорного SDK
+
+```yaml
+mounts:
+  shared-sdk:
+    repo: git@github.com:example/shared-sdk.git
+    hosted_in: [shop-web]
+    exec_path: /opt/shared-sdk
+```
+
+```bash
+cupli mounts attach shared-sdk        # mount in
+cupli mounts detach shared-sdk        # mount out
+```
+
+### Per-repo branch при checkout
+
+```bash
+cupli git checkout main                                 # все repo → main
+cupli git checkout main -t shop-api -t shop-web         # только эти два
+cupli git checkout -m shop-api=feature/x -m shop-web=main
+```
+
+### Tag-based фильтрация
+
+```yaml
+apps:
+  postgres: {tags: [infra, db]}
+  redis:    {tags: [infra, cache]}
+  shop-api: {tags: [backend]}
+```
+
+```bash
+cupli up --tag infra            # только postgres + redis
+```
+
+### Целиться в один сервис compound app'а
+
+```bash
+cupli up backend                # все сервисы app'а `backend`
+cupli up celery-worker          # только этот compose-сервис из compound app'а
+cupli up celery-worker celery-beat   # несколько конкретных сервисов
+```
+
+### Кастомные сети
+
+```yaml
+networks:
+  shared-net:
+    name: my-org-shared
+    driver: bridge
+  monitoring:
+    driver: bridge
+
+apps:
+  api:
+    service:
+      image: ...
+      networks: [default, shared-net]   # `default` — автосеть cupli
+  metrics:
+    service:
+      image: ...
+      networks: [monitoring]
+```
+
+---
+
+## Настройка IDE
+
+`cupli init` и `cupli ide setup` пишут JSON-schema mapping'и для тех
+editor'ов, которые обнаружили вокруг workspace'а (`auto` идёт вверх по
+родителям до границы git-репозитория, ища `.vscode/` или `.idea/`).
+Каждый сгенерированный `space.cupli.yaml` также несёт
+`# yaml-language-server: $schema=...` директиву на первой строке —
+современные редакторы подхватывают её и без config-файлов.
+
+### VS Code
+
+Поставь [YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml).
+Всё — schema-директива работает. Можно явно:
+
+```json
+// .vscode/settings.json
+{
+  "yaml.schemas": {
+    "./space.schema.json": "space.cupli.yaml"
+  }
+}
+```
+
+### PyCharm / IntelliJ
+
+В IntelliJ 2023.2+ встроенный YAML plugin понимает inline-директиву. Если нет:
+
+`Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema
+Mappings → +`
+
+* Name: `cupli space`
+* Schema file: выбрать `space.schema.json` из корня репо
+* File path pattern: `space.cupli.yaml` (или `*.cupli.yaml`)
+
+### neovim с LSP
+
+`yaml-language-server` понимает inline-директиву. Убедись, что он
+включён на `*.cupli.yaml`.
+
+### Регенерация schema
+
+`space.schema.json` лежит в корне и генерится из Pydantic-моделей:
+
+```bash
+make schema       # или: uv run python scripts/generate_schema.py
+```
+
+Запускай после изменений в `src/cupli/domain/models.py`.
+
+---
+
+## Сравнение с аналогами
+
+|  | cupli | docker compose | Tilt | Skaffold | Garden | Dip |
+|---|---|---|---|---|---|---|
+| Multi-repo | ✓ | — | partial | — | ✓ | — |
+| Spec format | YAML | YAML | Tiltfile (Python) | YAML | YAML | YAML |
+| docker-compose | ✓ | ✓ | partial | partial | ✓ | ✓ |
+| Kubernetes | — | — | ✓ | ✓ | ✓ | — |
+| UI / dashboard | basic | — | rich | basic | rich | — |
+| Mount toggling | ✓ | — | — | — | — | — |
+| Cross-repo git | ✓ | — | — | — | — | — |
+| Branch pinning + drift | ✓ | — | — | — | — | — |
+| Live reload | через compose watch | partial | rich | ✓ | ✓ | — |
+
+Ниша cupli: docker-compose-first multi-repo workspace'ы. Если ты на
+Kubernetes локально — лучше Tilt или Garden. Если всё в одном репо —
+обычного `docker compose` + `make` достаточно.
+
+---
+
+## Ограничения
+
+* **Один project за раз.** Один `space.cupli.yaml` = ровно один
+  docker-compose project. Чтобы скомпоновать два cupli workspace'а —
+  шарьте infra через external networks.
+* **Без нативного Kubernetes.** Compose-only.
+* **Без удалённого build farm'а.** Build'ы локальные через `docker compose`.
+* **Без secrets management.** `.env.local` (gitignored) + `${VAR}`
+  подстановка. Vault'а в коробке нет.
+* **Schema v1.** Несовместимые изменения гейтятся на `schema_version`.
+  `cupli upgrade-config` — placeholder под миграции.
+
+---
+
+## Troubleshooting + коды ошибок
+
+`cupli explain <code>` печатает полное описание. Шпаргалка:
+
+| Код | Смысл |
+|---|---|
+| `E001` | Space-файл не найден. |
+| `E002` | Validation failed (pydantic). Per-field сообщения с `file:line:col`. |
+| `E003` | Пустой / только-комментарии space-файл. |
+| `E004` | YAML syntax error. |
+| `E014` | Цикл в interpolation переменных. |
+| `E015` | User-переменная пересекается с reserved auto-var. |
+| `E016` | Unknown `${VAR}` при `--strict-vars`. |
+| `E017` | `git clone` упал. |
+| `E020` | Unknown имя (app / mount / target / space). |
+| `E028` | Unknown cupli error code (catch-all). |
+| `E029` | Space-файл уже существует. |
+| `E030` | Per-component env-var name collision (например, `shop-api` и `shop_api` оба → `SHOP_API_APP_PATH`). |
+
+Для `cupli space doctor` и `cupli config` вывод теперь содержит
+per-field summary с source locations.
+
+---
+
+## Contributing
+
+```bash
+git clone https://github.com/<user>/cupli && cd cupli
+uv sync
+make             # lint + tests
+make test
+make schema      # regenerate space.schema.json
+```
+
+Conventions: [`AGENTS.md`](AGENTS.md) (для AI-агентов) + inline
+doctests / docstrings.

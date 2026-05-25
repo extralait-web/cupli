@@ -1,0 +1,32 @@
+# .pre-commit-config.yaml, adopted from pydantic .pre-commit-config.yaml (https://github.com/pydantic/pydantic/blob/main/.pre-commit-config.yaml).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        args: [ '--unsafe' ]
+        exclude: tests/fixtures/spaces/invalid/bad_yaml_syntax.yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        additional_dependencies:
+          - tomli
+        exclude: '^uv\.lock$'
+  - repo: local
+    hooks:
+      - id: lint
+        name: Lint
+        entry: make lint
+        types: [ python ]
+        language: system
+        pass_filenames: false
+      - id: typecheck
+        name: Typecheck
+        entry: uv run pyright src/cupli
+        types: [ python ]
+        language: system
+        pass_filenames: false

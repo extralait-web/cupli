@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=../../../space.schema.json
+# =====================================================================
+#  examples/minimal — the smallest useful cupli workspace
+# =====================================================================
+#
+# Use case: you want ONE container running locally and don't want to
+# maintain a separate docker-compose file for it. Cupli handles project
+# name, network, env injection, container_name — all from this file.
+#
+# Try:
+#   cupli -f space.cupli.yaml up
+#   cupli -f space.cupli.yaml ps
+#   cupli -f space.cupli.yaml logs cache -f
+#   cupli -f space.cupli.yaml exec -c cache -- redis-cli
+#   cupli -f space.cupli.yaml down
+# =====================================================================
+
+schema_version: 1
+name: minimal
+
+# Variables visible in this YAML AND piped into docker compose via
+# override.env so any ${VAR} in compose-syntax resolves.
+vars:
+  CACHE_PORT: "6379"
+
+apps:
+
+  # A single app with an inline compose spec — no external compose file.
+  cache:
+    service:                       # `service:` as a DICT = inline single-service
+      image: redis:7-alpine
+      restart: unless-stopped
+      command: ["redis-server", "--appendonly", "yes"]
+      healthcheck:
+        test: ["CMD", "redis-cli", "ping"]
+        interval: 5s
+        retries: 12
+    ports:
+      - "${CACHE_PORT}:6379"
+    vars:
+      LOG_LEVEL: info              # injected as services.cache.environment

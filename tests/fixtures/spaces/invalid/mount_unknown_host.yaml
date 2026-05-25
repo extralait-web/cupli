@@ -1,0 +1,7 @@
+name: mount-unknown-host
+apps:
+  api: {}
+mounts:
+  sdk:
+    hosted_in: [missing_app]
+    exec_path: /opt/sdk

@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../../space.schema.json
+# =====================================================================
+#  examples/celery — one app driving several compose services
+# =====================================================================
+#
+# Use case: a FastAPI/Django/Flask backend with multiple celery workers
+# and a beat scheduler — all sharing the same image, build context, and
+# environment. Cupli's `services:` map describes them inline.
+#
+# Both `service:` and `services:` accept ANY docker-compose service
+# attribute (`image`, `build`, `command`, `depends_on`, `healthcheck`,
+# `volumes`, `restart`, etc.) — they're written verbatim into a
+# generated `docker-compose.inline.yml` and merged into docker compose's plan.
+#
+# Try:
+#   cupli -f space.cupli.yaml up
+#   cupli -f space.cupli.yaml ps
+#   cupli -f space.cupli.yaml logs celery-worker-default -f
+#   cupli -f space.cupli.yaml exec -c celery-worker-default -- \
+#       celery -A app.tasks inspect active
+#   cupli -f space.cupli.yaml down
+# =====================================================================
+
+schema_version: 1
+name: celery-demo
+
+# Space-scope vars land in override.env, so docker-compose's ${VAR}
+# substitution sees them inside every service block.
+vars:
+  REGISTRY: ghcr.io/example
+  STACK_ENV: dev
+  IMAGE: ${REGISTRY}/backend:${STACK_ENV}
+  REDIS_URL: redis://redis:6379/0
+  DATABASE_URL: postgresql+psycopg://shop:shop@postgres:5432/shop
+
+apps:
+
+  # ----- infra (single inline service per app) -----------------------
+
+  redis:
+    service: # any docker-compose attrs are fine here
+      image: redis:7-alpine
+      restart: unless-stopped
+      command: [ "redis-server", "--appendonly", "yes" ]
+      healthcheck:
+        test: [ "CMD", "redis-cli", "ping" ]
+        interval: 5s
+    tags: [ infra ]
+
+  postgres:
+    service:
+      image: postgres:16-alpine
+      environment:
+        POSTGRES_DB: shop
+        POSTGRES_USER: shop
+        POSTGRES_PASSWORD: shop
+      volumes:
+        - postgres-data:/var/lib/postgresql/data
+      healthcheck:
+        test: [ "CMD-SHELL", "pg_isready -U shop" ]
+        interval: 5s
+    tags: [ infra ]
+    ports:
+      - "5432:5432"
+
+  # ----- backend with celery (compound app) --------------------------
+
+  backend:
+    deps: # cross-app depends_on
+      postgres: [ default ]
+      redis: [ default ]
+    tags: [ backend ]
+    vars: # shared with EVERY service in `services:`
+      LOG_LEVEL: debug
+      CELERY_BROKER_URL: ${REDIS_URL}
+      CELERY_RESULT_BACKEND: ${REDIS_URL}
+    ports: # default ports for every service (overridable below)
+      - "8000:8000"
+    services:
+      # PRIMARY service. `services:` keys = docker-compose service names.
+      backend:
+        image: ${IMAGE}
+        build:
+          context: ${BACKEND_APP_PATH}      # default APPS_PATH/backend; auto-var
+          dockerfile: Dockerfile
+        command: [ "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000" ]
+        healthcheck:
+          test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+          interval: 10s
+        restart: unless-stopped
+
+      # Two celery workers — same image, different queue + concurrency.
+      celery-worker-default:
+        image: ${IMAGE}
+        command: [ "celery", "-A", "app.tasks", "worker", "-Q", "default", "-c", "4" ]
+        depends_on: [ backend ]
+        restart: unless-stopped
+        ports: [ ]                           # opt out of app-level ports
+        vars:
+          CELERY_LOG_LEVEL: info            # per-service override (merged on top of app vars)
+
+      celery-worker-heavy:
+        image: ${IMAGE}
+        command: [ "celery", "-A", "app.tasks", "worker", "-Q", "heavy", "-c", "1" ]
+        depends_on: [ backend ]
+        restart: unless-stopped
+        ports: [ ]
+        vars:
+          CELERY_LOG_LEVEL: warn
+
+      # Beat scheduler — different command, same image.
+      celery-beat:
+        image: ${IMAGE}
+        command: [ "celery", "-A", "app.tasks", "beat", "--schedule=/tmp/celerybeat-schedule" ]
+        depends_on: [ backend ]
+        restart: unless-stopped
+        ports: [ ]

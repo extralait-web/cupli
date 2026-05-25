@@ -1,0 +1,7 @@
+name: mount-relative-exec
+apps:
+  api: {}
+mounts:
+  sdk:
+    hosted_in: [api]
+    exec_path: opt/sdk

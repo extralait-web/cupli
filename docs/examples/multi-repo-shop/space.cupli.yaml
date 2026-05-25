@@ -1,0 +1,217 @@
+# yaml-language-server: $schema=../../../space.schema.json
+# =====================================================================
+#  examples/multi-repo-shop — realistic multi-repository workspace
+# =====================================================================
+#
+# Use case: a "monorepo feel" for a project where every piece lives in
+# its own git repository (backend, frontend, shared SDK), with a couple
+# of infra services that don't need a repo at all (postgres, redis).
+#
+# Layout that cupli expects (all under SPACE_PATH unless overridden):
+#
+#   src/apps/<name>/        — repo-backed apps (own .git, own Dockerfile)
+#   src/bases/<name>/       — reusable templates (compose fragments + vars)
+#   src/mounts/<name>/      — bind-mount sources (own .git, swap in/out)
+#   infra/                  — purely-infra compose-fragments
+#
+# Try:
+#   cp .env.example .env       # if you have one
+#   cupli init                 # registers + clones declared repos
+#   cupli up                   # starts everything (postgres → migrate → api → web)
+#   cupli ps
+#   cupli logs shop-api -f
+#   cupli git status           # status across every cloned repo
+#   cupli mounts attach shared-sdk
+# =====================================================================
+
+schema_version: 1
+name: shop
+
+envs:
+  - ${SPACE_PATH}/.env
+  - ${SPACE_PATH}/.env.local
+
+vars:
+  STACK_ENV: dev
+  REGISTRY: ghcr.io/example
+  USER_ID: ${USER_ID:-1000}
+  GROUP_ID: ${GROUP_ID:-1000}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: shop
+  POSTGRES_USER: shop
+  POSTGRES_PASSWORD: shop
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
+
+# =====================================================================
+#  BASES — shared docker-compose fragments + vars
+# =====================================================================
+bases:
+
+  python_runtime:
+    vars:
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    composes:
+      - ${BASES_PATH}/python_runtime/docker-compose.base.yml
+
+  node_runtime:
+    vars:
+      NODE_ENV: development
+    composes:
+      - ${BASES_PATH}/node_runtime/docker-compose.base.yml
+
+  pg_client:
+    vars:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+
+  redis_client:
+    vars:
+      REDIS_URL: redis://${REDIS_HOST}:${REDIS_PORT}/0
+
+
+# =====================================================================
+#  APPS
+# =====================================================================
+apps:
+
+  # ----- infra (inline single-services — no compose file needed) -----
+
+  postgres:
+    service:                                 # inline: ANY docker-compose attribute
+      image: postgres:16-alpine
+      environment:
+        POSTGRES_DB: ${POSTGRES_DB}
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      volumes:
+        - postgres-data:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+        interval: 5s
+        retries: 12
+      restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    tags: [infra, db]
+
+  redis:
+    service:
+      image: redis:7-alpine
+      command: ["redis-server", "--appendonly", "yes"]
+      volumes:
+        - redis-data:/data
+      healthcheck:
+        test: ["CMD", "redis-cli", "ping"]
+        interval: 5s
+      restart: unless-stopped
+    ports:
+      - "${REDIS_PORT}:6379"
+    tags: [infra, cache]
+
+  # ----- backend (external compose, own repo) -----------------------
+
+  shop-api:
+    repo: git@github.com:example/shop-api.git
+    branch: main                              # `cupli git status` flags drift
+    bases: [python_runtime, pg_client, redis_client]
+    deps:
+      postgres: [default]
+      redis: [default]
+      migrate: [default]
+    tags: [backend]
+    mode: up
+    composes:
+      - ${APP_PATH}/docker-compose.yml
+      - ${APP_PATH}/docker-compose.dev.yml
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    vars:
+      LOG_LEVEL: debug
+      APP_PORT: "8000"
+      IMAGE: ${REGISTRY}/shop-api:${STACK_ENV}
+    # `develop.watch` for `cupli watch` lives in docker-compose.dev.yml on the service itself
+
+  migrate:
+    repo: git@github.com:example/shop-api.git    # same repo as shop-api
+    path: ${SHOP_API_APP_PATH}                   # reuse shop-api's working tree
+    branch: main
+    bases: [python_runtime, pg_client]
+    deps:
+      postgres: [default]
+    mode: oneshot                                 # runs once, exits
+    tags: [backend, tools]
+    composes:
+      - ${APP_PATH}/docker-compose.yml
+
+  # ----- frontend (external compose, own repo) ----------------------
+
+  shop-web:
+    repo: git@github.com:example/shop-web.git
+    branch: main
+    bases: [node_runtime]
+    deps:
+      shop-api: [default]
+    tags: [frontend]
+    mode: up
+    composes:
+      - ${APP_PATH}/docker-compose.yml
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    vars:
+      VITE_API_URL: http://localhost:${APP_PORT:-8000}
+      WEB_PORT: "5173"
+      IMAGE: ${REGISTRY}/shop-web:${STACK_ENV}
+
+
+# =====================================================================
+#  MOUNTS — bind a shared TS SDK into shop-web on demand
+# =====================================================================
+mounts:
+
+  shared-sdk:
+    repo: git@github.com:example/shared-sdk.git
+    branch: main
+    hosted_in: [shop-web]
+    exec_path: /opt/shared-sdk
+    mode: rw
+
+
+# =====================================================================
+#  COMMANDS — workspace shortcuts
+# =====================================================================
+commands:
+
+  lint:
+    container: shop-api
+    run: ruff check src tests
+    help: Lint the backend.
+    top_level: true
+
+  test:
+    container: shop-api
+    run: pytest -xvs
+    workdir: /app
+    help: Run the backend test suite.
+    top_level: true
+
+  fmt:
+    container: shop-api
+    run: ruff format src tests
+    help: Format the backend.
+    top_level: false
+
+  shell-pg:
+    container: postgres
+    run: psql -U ${POSTGRES_USER} ${POSTGRES_DB}
+    help: Open a psql shell against the postgres service.
+    top_level: false
+
+  alembic-revision:
+    container: shop-api
+    run: alembic revision --autogenerate -m
+    workdir: /app
+    help: Create a new alembic revision (append the message after the command).
+    top_level: false

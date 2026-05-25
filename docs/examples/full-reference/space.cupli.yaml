@@ -1,0 +1,336 @@
+# yaml-language-server: $schema=../../../space.schema.json
+# =====================================================================
+#  space.cupli.yaml — FULL REFERENCE
+# =====================================================================
+#
+#  Every key the v0.2 schema understands appears in this file at least
+#  once, paired with an inline comment explaining its effect.
+#
+#  Quick-reference cheat-sheet:
+#
+#   root           : schema_version, name, cupli_min/max, extends, envs, vars
+#   bases          : reusable component templates (multi-inherit, C3 order)
+#   apps           : run units (UP/ONESHOT/DISABLED), each may declare a
+#                    primary `service:` (string OR inline dict) or a
+#                    multi-service `services:` map
+#   mounts         : bind-mounts that toggle on/off without re-cloning
+#   hooks          : per-target git-hook overrides
+#   commands       : `cupli sc <name>` / `cupli <name>` (with top_level: true)
+#
+# AUTO-VARS exported by cupli (always available in ${...} interpolation):
+#
+#   space scope     SPACE_NAME, SPACE_PATH, APPS_DIR, APPS_PATH,
+#                   BASES_DIR, BASES_PATH, MOUNTS_DIR, MOUNTS_PATH,
+#                   LOCALS_DIR, LOCALS_PATH, NETWORK, COMPOSE_PROJECT_NAME
+#   per-component   <NAME>_APP_PATH    for every apps[*]
+#                   <NAME>_BASE_PATH   for every bases[*]
+#                   <NAME>_MOUNT_PATH  for every mounts[*]
+#                   (uppercased, "-" → "_"; available in YAML AND env-file)
+#   base / app      APP_NAME, APP_PATH, APP_LOCAL_PATH (apps only)
+#   mount           MOUNT_NAME, MOUNT_PATH, MOUNT_HOST, MOUNT_EXEC_PATH
+#
+# INTERPOLATION: ${VAR} and ${VAR:-default}. Defaults are LITERAL —
+# nested ${...} inside a default is NOT supported. Bareword $VAR is NOT
+# supported. Cycles raise E014. Unknown vars resolve to "" with a yellow
+# warning (E016 in strict mode via `--strict-vars`).
+#
+# VAR PRECEDENCE (later overrides earlier):
+#   process env (PATH/HOME/USER/SSH_AUTH_SOCK/SHELL/TERM/LANG/LC_ALL)
+#     -> space auto-vars
+#       -> default <NAME>_*_PATH vars
+#         -> space envs (files)
+#           -> space vars
+#             -> for each base in c3_linearise(app): base auto-vars / envs / vars
+#               -> app auto-vars
+#                 -> app envs
+#                   -> app vars
+#
+# RESERVED NAMES: every auto-var name is reserved. User vars that shadow
+# a reserved name raise E015 unless --allow-shadow is passed.
+# =====================================================================
+
+
+# Schema version pin. Only `1` is supported in this release.
+schema_version: 1
+
+# Identifier — used as docker-compose project name AND network name.
+# Must match ^[A-Za-z][A-Za-z0-9_-]*$.
+name: example
+
+# Tool-version guards. Use `*` for any.
+cupli_min: 0.2.0
+cupli_max: "*"
+
+# Optional: inherit from a parent space (one level only in v1).
+# extends: ${SPACE_PATH}/../shared/base.cupli.yaml
+
+# Workspace-scope env files. Loaded BEFORE `vars` (so vars may reference them).
+envs:
+  - ${SPACE_PATH}/.env
+  - ${SPACE_PATH}/.env.local
+
+# Workspace-scope variables. Visible to every app / base / mount and
+# written to `override.env` (so compose-files may `${VAR}`-substitute too).
+vars:
+  STACK_ENV: dev
+  REGISTRY: ghcr.io/example
+  USER_ID: ${USER_ID:-1000}
+  GROUP_ID: ${GROUP_ID:-1000}
+
+
+# =====================================================================
+#  BASES — inheritable templates for apps.
+# =====================================================================
+#
+# A base is a partial component: it can contribute `vars`, `envs`,
+# `composes`, optional `repo` / `branch` / `post_clone`, and a `path:`.
+# Apps cite bases via `bases: [name1, name2]` and inherit them in C3
+# linearisation order.
+# =====================================================================
+bases:
+
+  python_runtime:
+    path: ${BASES_PATH}/python_runtime    # default; can be overridden
+    repo: git@github.com:example/python-runtime.git   # optional, makes it a real git repo
+    branch: main                            # optional pin: clone -b <branch>
+    post_clone: bash ./scripts/init.sh      # optional shell ran after clone succeeds
+    init_vars:
+      GIT_SSL_NO_VERIFY: "false"            # env exported to clone + post_clone
+    envs:
+      - ${APP_PATH}/.env                    # APP_PATH is available because bases reuse the component scope
+    vars:
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    composes:
+      - ${APP_PATH}/docker-compose.base.yml   # merged into every inheriting app's COMPOSE_FILE chain
+
+  pg_client:
+    # A base may consist of just `vars:` — no repo, no composes.
+    vars:
+      PGCONNECT_TIMEOUT: "5"
+
+
+# =====================================================================
+#  APPS — the units that actually run.
+# =====================================================================
+#
+# An app is what cupli starts/stops via `cupli up` / `cupli stop`. It
+# binds to one or more compose-services. The binding is declared with
+# `service:` (string OR inline dict) OR `services:` (map). These are
+# mutually exclusive — pick one.
+# =====================================================================
+apps:
+
+  # -------------------------------------------------------------------
+  # FORM A — bind to a compose-service by name (existing in a compose
+  # file listed under `composes:`).
+  # -------------------------------------------------------------------
+  postgres:
+    composes:
+      - ${SPACE_PATH}/infra/postgres.compose.yml   # external compose-fragment
+    tags: [infra]                                  # for `cupli up --tag infra`
+    mode: up                                       # up | oneshot | disabled
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"              # injected as services.postgres.ports
+    # `service:` omitted → cupli uses the app name "postgres" as the
+    # compose-service name to bind to.
+
+  # -------------------------------------------------------------------
+  # FORM B — string `service:` to RENAME the compose-service binding.
+  # Useful when the compose-fragment ships a service named differently
+  # from the cupli app.
+  # -------------------------------------------------------------------
+  redis:
+    service: agora-redis                           # bind to `services.agora-redis`
+    composes:
+      - ${SPACE_PATH}/infra/redis.compose.yml
+    tags: [infra]
+    mode: up
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  # -------------------------------------------------------------------
+  # FORM C — INLINE single-service via dict `service:`. No external
+  # compose file needed; everything fits in space.cupli.yaml.
+  # -------------------------------------------------------------------
+  cache:
+    service:
+      image: memcached:1.6-alpine
+      command: ["memcached", "-m", "64"]
+      restart: unless-stopped
+      healthcheck:
+        test: ["CMD", "echo", "stats", "|", "nc", "localhost", "11211"]
+        interval: 10s
+    vars:
+      LOG_LEVEL: info                              # injected as services.cache.environment
+    ports:
+      - "11211:11211"
+    tags: [infra, cache]
+
+  # -------------------------------------------------------------------
+  # FORM D — `services:` MAP for compound apps (celery worker + beat,
+  # api + sidecar, etc.). Each entry may mix compose-syntax fields with
+  # cupli-only `vars` (merged) and `ports` (replaced).
+  # -------------------------------------------------------------------
+  api:
+    path: ${APPS_PATH}/custom_api_dir              # custom on-disk location
+    repo: git@github.com:example/api.git
+    branch: main
+    post_clone: ${SPACE_PATH}/scripts/init-api.sh
+    init_vars:
+      GIT_SSL_NO_VERIFY: "false"
+    bases: [python_runtime, pg_client]
+    deps:
+      postgres: [default]                          # cross-app depends_on (mode-filtered)
+      migrate: [default]
+    tags: [backend, system]
+    mode: up
+    composes:
+      - ${APP_PATH}/docker-compose.yml
+      - ${APP_PATH}/docker-compose.dev.yml
+    envs:
+      - ${APP_PATH}/.env.local
+    vars:
+      LOG_LEVEL: debug
+      IMAGE: ${REGISTRY}/api:${APP_NAME}-${STACK_ENV}
+      DATABASE_URL: postgresql+psycopg://...       # shared with every service in `services:` map
+    ports:                                         # app-level ports (default for every service)
+      - "${APP_PORT:-8000}:8000"
+    services:
+      api:                                         # primary, "ports" inherited from app-level
+        image: ${IMAGE}
+        build:
+          context: ${API_APP_PATH}
+          dockerfile: Dockerfile
+        command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+        develop:                                   # native compose `develop.watch` — picked up by `cupli watch`
+          watch:
+            - action: sync
+              path: ./src
+              target: /app/src
+              ignore: [node_modules, .venv, __pycache__, "*.pyc"]
+            - action: sync+restart
+              path: ./conf/uvicorn.ini
+              target: /app/conf/uvicorn.ini
+            - action: rebuild
+              path: pyproject.toml
+      celery-worker-default:
+        image: ${IMAGE}
+        command: ["celery", "-A", "app.tasks", "worker", "-Q", "default", "--concurrency=4"]
+        depends_on: [api]                          # plain compose syntax
+        ports: []                                  # explicit empty: opt out of inherited ports
+        vars:
+          CELERY_LOG_LEVEL: info                   # per-service override (merged on top of app vars)
+      celery-beat:
+        image: ${IMAGE}
+        command: ["celery", "-A", "app.tasks", "beat"]
+        depends_on: [api]
+        ports: []
+    forward_ssh: false                             # opt-in: mount $SSH_AUTH_SOCK into the container
+
+  # -------------------------------------------------------------------
+  # ONESHOT app — runs once and exits (migrations, seeders, …).
+  # `cupli up` runs it and waits for service_completed_successfully
+  # before continuing to dependents.
+  # -------------------------------------------------------------------
+  migrate:
+    repo: git@github.com:example/migrate.git
+    bases: [python_runtime]
+    deps:
+      postgres: [default]
+    mode: oneshot                                  # exits after the command finishes
+    tags: [tools]
+    composes:
+      - ${APP_PATH}/docker-compose.yml
+
+
+# =====================================================================
+#  MOUNTS — bind-mount host code into one or more containers.
+# =====================================================================
+#
+# A mount appears as a `services.<host>.volumes` entry ONLY when the
+# mount is "attached" (toggle via `cupli mounts attach/detach <name>`).
+# This lets you swap a vendored SDK for a local checkout without
+# editing YAML.
+# =====================================================================
+mounts:
+
+  sdk:
+    path: ${MOUNTS_PATH}/sdk                       # default location
+    repo: git@github.com:example/web-sdk.git
+    branch: main
+    post_clone: bash ./scripts/build-sdk.sh
+    hosted_in: [api, migrate]                      # apps whose every service receives the bind-mount
+    exec_path: /opt/sdk                            # absolute POSIX path inside container
+    mode: rw                                       # rw | ro
+    mac_volume: delegated                          # optional macOS perf hint
+    envs:
+      - ${MOUNT_PATH}/.env.local
+    vars:
+      SDK_BUILD_DIR: /opt/sdk/build
+
+
+# =====================================================================
+#  NETWORKS — top-level docker-compose `networks:` block.
+#
+#  Cupli auto-attaches every service to `default` (named after the
+#  workspace). Any extra networks declared here are merged into
+#  `docker-compose.pre.yml` verbatim — drivers, ipam, `name:` overrides,
+#  external networks, all of compose's `networks.<name>.*` syntax is
+#  honoured. A service opts into a custom network the usual compose
+#  way: `services.<x>.networks: [shared-net, default]`.
+# =====================================================================
+networks:
+
+  shared-net:
+    name: example-shared                             # custom external-visible name
+    driver: bridge
+
+  monitoring:
+    driver: bridge
+
+
+# =====================================================================
+#  HOOK OVERRIDES — per-target tweaks for `cupli hooks install`.
+# =====================================================================
+hooks:
+  sdk:
+    service: api                                   # which compose-service runs the hook
+    working_dir: /opt/sdk
+    enabled: true
+
+
+# =====================================================================
+#  WORKSPACE COMMANDS — `cupli sc <name>` (or `cupli <name>` when promoted).
+# =====================================================================
+#
+# A command is a shortcut for "exec this fixed argv inside this
+# service". `top_level: true` ALSO registers it as a first-class verb
+# alongside `cupli up`, `cupli logs`, etc.
+# =====================================================================
+commands:
+
+  lint:
+    container: api                                 # which app's primary service
+    run: ruff check .
+    help: Lint the api source tree.
+    top_level: true                                # `cupli lint` works too
+
+  test:
+    container: api
+    run: pytest -xvs
+    workdir: /workspace                            # cwd inside the container
+    help: Run the api test suite.
+    top_level: true
+
+  fmt:
+    container: api
+    run: ruff format .
+    help: Format the api source tree.
+    top_level: false                               # only reachable via `cupli sc fmt`
+
+  shell-pg:
+    container: postgres
+    run: psql -U postgres
+    help: Open a psql shell against the postgres service.
+    top_level: false

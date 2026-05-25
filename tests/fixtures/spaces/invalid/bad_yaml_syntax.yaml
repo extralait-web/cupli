@@ -1,0 +1,4 @@
+name: broken
+apps:
+  api:
+    repo: "unterminated string

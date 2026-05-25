@@ -1,0 +1,252 @@
+# Pyproject.toml, adopted from pydantic pyproject.toml (https://github.com/pydantic/pydantic/blob/main/pyproject.toml).
+[build-system]
+requires = ['hatchling', 'hatch-fancy-pypi-readme>=22.5.0']
+build-backend = 'hatchling.build'
+
+[project]
+name = "cupli"
+description = 'Multi-repository docker-compose workspace orchestrator: one YAML, one `cupli up`, every container running.'
+requires-python = ">=3.10"
+authors = [
+    { name = 'Abbakumov Valerii', email = 'tehnolog1999@gmail.com' },
+]
+maintainers = [
+    { name = 'Abbakumov Valerii', email = 'tehnolog1999@gmail.com' },
+]
+license = 'MIT'
+license-files = ['LICENSE']
+classifiers = [
+    'Development Status :: 3 - Alpha',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: Implementation :: CPython',
+    'Programming Language :: Python :: Implementation :: PyPy',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3 :: Only',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
+    'Intended Audience :: Developers',
+    'Intended Audience :: Information Technology',
+    'Operating System :: OS Independent',
+    'Topic :: Software Development :: Libraries :: Python Modules',
+]
+keywords = [
+    "cupli",
+    "cli",
+    "docker",
+    "compose",
+    "docker-compose",
+    "monorepo",
+    "multi-repo",
+    "workspace",
+    "orchestrator",
+    "devtools",
+]
+
+dependencies = [
+    'typing-extensions>=4.14.1',
+    'typer>=0.21.1',
+    "pyyaml>=6.0.3",
+    "python-dotenv>=1.2.1",
+    "pydantic>=2.7",
+    "ruamel.yaml>=0.18",
+    "rich>=13.7",
+    "packaging>=23",
+]
+
+dynamic = ['version', 'readme']
+
+[project.urls]
+Homepage = 'https://github.com/extralait-web/cupli'
+Documentation = 'https://github.com/extralait-web/cupli'
+Source = 'https://github.com/extralait-web/cupli'
+Issues = "https://github.com/extralait-web/cupli/issues"
+Changelog = "https://github.com/extralait-web/cupli/blob/master/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    'coverage[toml]',
+    'pytest',
+    'pytest-cov',
+    'pytest-mock',
+    'pytest-dotenv',
+    'faker',
+    'IPython',
+    "pytest-subprocess>=1.5",
+    "hypothesis>=6",
+    "syrupy>=4",
+]
+linting = [
+    'ruff',
+    'pyright',
+]
+typechecking = [
+    'pyright',
+    'pyrefly',
+]
+
+all = [
+    { include-group = 'dev' },
+    { include-group = 'linting' },
+    { include-group = 'typechecking' },
+]
+
+[project.scripts]
+cupli = "cupli.manage:app"
+
+[project.entry-points."pipx.run"]
+cupli = "cupli.manage:app"
+
+[tool.hatch.version]
+path = 'src/cupli/version.py'
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = [
+    '/README.md',
+    '/AGENTS.md',
+    '/Makefile',
+    '/src',
+    '/tests',
+]
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = 'text/markdown'
+# construct the PyPI readme from README.md and HISTORY.md
+fragments = [
+    { path = 'README.md' },
+    { text = "\n## Changelog\n\n" },
+    { path = 'CHANGELOG.md', pattern = '(.+?)<!-- package description limit -->' },
+]
+# convert GitHub issue/PR numbers and handles to links
+substitutions = [
+    #    { pattern = '(\s+)#(\d+)', replacement = '\1[#\2](https://github.com/extralait-web/cupli/issues/\2)' },
+    #    { pattern = '(\s+)@([\w\-]+)', replacement = '\1[@\2](https://github.com/\2)' },
+    { pattern = '@@', replacement = '@' },
+]
+
+[tool.uv]
+default-groups = ['dev']
+required-version = '>=0.8.4'
+
+[tool.ruff]
+line-length = 120
+target-version = 'py310'
+
+[tool.ruff.lint]
+select = [
+    'E', # pycodestyle
+    'W', # pycodestyle
+    'F', # Pyflakes
+    'I', # isort
+    'D', # pydocstyle
+    'UP', # pyupgrade
+    'YTT', # flake8-2020
+    'B', # flake8-bugbear
+    'TC', # flake8-type-checking
+    'T10', # flake8-print
+    'T20', # flake8-print
+    'Q', # flake8-quotes
+    'C4', # mccabe
+    'PERF', # Perflint
+    'PIE', # flake8-pie
+    'PYI006', # bad-version-info-comparsion
+    'PYI062', # duplicate-literal-member
+    'PYI063', # pep484-style-positional-only-parameter
+    'PYI066', # bad-version-info-order
+    'RUF100',
+]
+ignore = [
+    'B008', # function-call-in-default-argument
+    'B904', # raise-without-from-inside-except
+    'B905', # zip-without-explicit-strict
+    'C901', # complex-structure
+    'E501', # line-too-long
+    'N818', # error-suffix-on-exception-name
+    'S308', # suspicious-mark-safe-usage
+    'E731', # lambda-assignment
+    'PLR0911', # too-many-return-statements
+    'PLR0912', # too-many-branches
+    'PLR0913', # too-many-arguments
+    'PLR0915', # too-many-statements
+    'F405', # undefined-local-with-import-star-usage
+    'C408', # unnecessary-collection-call
+]
+isort = { known-first-party = ['cupli', 'tests'] }
+pydocstyle = { convention = 'google' }
+
+[tool.ruff.lint.per-file-ignores]
+'docs/**/*.py' = [
+    'T', # flake8-pring
+    'D10', # pydocstyle
+]
+'tests/**/*.py' = [
+    'T', # flake8-print
+    'D10', # pydocstyle
+    'E721', # type-comparsion
+    'F811', # redefined-while-unused
+    'B018', # useless-expression
+]
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+    'pydantic.BaseModel',
+]
+runtime-evaluated-decorators = [
+    'pydantic.field_validator',
+    'pydantic.model_validator',
+    'pydantic.computed_field',
+]
+
+[tool.ruff.format]
+quote-style = 'double'
+
+[tool.coverage.run]
+source = ['src/cupli']
+branch = true
+relative_files = true
+context = '${CONTEXT}'
+
+[tool.pytest.ini_options]
+testpaths = 'tests'
+xfail_strict = true
+addopts = '-m "not docker"'
+markers = [
+    'docker: requires a running docker daemon (run via `make smoke`)',
+]
+
+[tool.coverage.report]
+precision = 2
+exclude_lines = [
+    'pragma: no cover',
+    'raise NotImplementedError',
+    'if TYPE_CHECKING:',
+    'if typing.TYPE_CHECKING:',
+    '@overload',
+    '@typing.overload',
+    '\(Protocol\):$',
+    '\(Protocol\[(.)+\]\):$',
+    'typing.assert_never',
+    'assert_never',
+]
+
+[tool.pyright]
+pythonVersion = '3.10'
+include = ['src/cupli']
+enableExperimentalFeatures = true
+reportRedeclaration = false
+venvPath = '.'
+venv = '.venv'
+
+[tool.codespell]
+skip = '.git,env*,uv.lock'
+# `ser` - abbreviation for 'ser'ialisation
+ignore-words-list = 'gir,ser,deques,afile'
+
+[tool.mypy]
+ignore_missing_imports = true
+follow_untyped_imports = true

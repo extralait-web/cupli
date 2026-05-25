@@ -1,0 +1,5 @@
+name: unknown-dep
+apps:
+  api:
+    deps:
+      ghost: [default]

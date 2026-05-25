@@ -1,0 +1,4 @@
+name: minimal
+apps:
+  api:
+    repo: git@github.com:example/api.git

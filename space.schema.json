@@ -1,0 +1,1135 @@
+{
+  "$defs": {
+    "AppModel": {
+      "additionalProperties": false,
+      "description": "One ``apps[<name>]`` entry.\n\nAttributes:\n    bases: base names to inherit from (multi-inheritance, C3 ordered).\n    deps: cupli-level start dependencies, mode-tagged.\n    tags: free-form tags used by ``cupli start --tag``.\n    mode: how the service runs (``up``, ``oneshot``, ``disabled``).\n    composes: compose files defining this app's services.\n    service: docker-compose service binding for this app.\n        * Omit it: app drives the compose service whose name == app's name.\n        * String: name of the existing compose service to bind to.\n        * Mapping: inline single-service spec — any docker-compose fields,\n          service name defaults to the app's name. Removes the need for a\n          separate compose file when one service is enough.\n        Mutually exclusive with the ``services:`` map.\n    services: multi-service map for compound apps (celery + workers + beat).\n        Each entry can mix cupli-specific keys (``vars``, ``ports``) with\n        arbitrary docker-compose attributes.\n    ports: compose-style port mappings (``\"8000:8000\"``, ``\"127.0.0.1:8000:8000\"``,\n        ``\"5432:5432/tcp\"``) injected into the service's ``ports:`` block. ``${VAR}``\n        references are substituted in the app's scope.\n    forward_ssh: opt-in to forward ``SSH_AUTH_SOCK`` into the container.",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "post_clone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Post Clone"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "envs": {
+          "title": "Envs",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "init_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Init Vars",
+          "type": "object"
+        },
+        "bases": {
+          "title": "Bases",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "deps": {
+          "title": "Deps",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+              }
+            },
+            {
+              "patternProperties": {
+                "^[A-Za-z][A-Za-z0-9_-]*$": {
+                  "items": {
+                    "$ref": "#/$defs/DepMode"
+                  },
+                  "type": "array"
+                }
+              },
+              "propertyNames": {
+                "maxLength": 64,
+                "minLength": 1
+              },
+              "type": "object"
+            }
+          ]
+        },
+        "tags": {
+          "title": "Tags",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9_-]*$",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/ServiceMode",
+          "default": "up"
+        },
+        "composes": {
+          "title": "Composes",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/ServiceOverride"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service"
+        },
+        "services": {
+          "title": "Services",
+          "default": null,
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+              }
+            },
+            {
+              "anyOf": [
+                {
+                  "patternProperties": {
+                    "^[A-Za-z][A-Za-z0-9_-]*$": {
+                      "$ref": "#/$defs/ServiceOverride"
+                    }
+                  },
+                  "propertyNames": {
+                    "maxLength": 64,
+                    "minLength": 1
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ]
+        },
+        "ports": {
+          "title": "Ports",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "forward_ssh": {
+          "default": false,
+          "title": "Forward Ssh",
+          "type": "boolean"
+        }
+      },
+      "title": "AppModel",
+      "type": "object"
+    },
+    "BaseAppModel": {
+      "additionalProperties": false,
+      "description": "One ``bases[<name>]`` entry.\n\nBases are inheritable templates included by apps. Their ``composes`` files\nare prepended to including-apps' compose list.\n\nAttributes:\n    composes: compose files to merge into including apps.",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "post_clone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Post Clone"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "envs": {
+          "title": "Envs",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "init_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Init Vars",
+          "type": "object"
+        },
+        "composes": {
+          "title": "Composes",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "title": "BaseAppModel",
+      "type": "object"
+    },
+    "CommandShortcut": {
+      "additionalProperties": false,
+      "description": "One ``commands[<name>]`` entry.\n\nBy default reachable only via ``cupli sc <name>``. Set\n``top_level: true`` to ALSO register it as a first-class ``cupli <name>``\nverb (collisions with builtin commands are ignored).\n\nAttributes:\n    container: app name whose service runs the command.\n    run: shell command line executed inside the container.\n    workdir: working directory inside the container.\n    help: short help string shown in ``cupli --help``.\n    top_level: when True, the command is promoted to a top-level verb\n        so ``cupli <name>`` works alongside ``cupli sc <name>``.",
+      "properties": {
+        "container": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "Container",
+          "type": "string"
+        },
+        "run": {
+          "title": "Run",
+          "type": "string"
+        },
+        "workdir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workdir"
+        },
+        "help": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Help"
+        },
+        "top_level": {
+          "default": false,
+          "title": "Top Level",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "container",
+        "run"
+      ],
+      "title": "CommandShortcut",
+      "type": "object"
+    },
+    "DepMode": {
+      "description": "Dependency mode tag on ``apps[*].deps[<svc>]``.\n\nA dependency starts only when the invocation's mode intersects its mode\nset. ``DEFAULT`` covers the common ``cupli start`` path.",
+      "enum": [
+        "default",
+        "hook",
+        "full"
+      ],
+      "title": "DepMode",
+      "type": "string"
+    },
+    "HooksOverride": {
+      "additionalProperties": false,
+      "description": "Per-target hook overrides used by ``cupli set-hooks``.\n\nAttributes:\n    service: docker-compose service to exec into (default: target's service).\n    working_dir: working directory inside the container.\n    enabled: whether to install shims for this target.",
+      "properties": {
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service"
+        },
+        "working_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Dir"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "HooksOverride",
+      "type": "object"
+    },
+    "MacVolumeMode": {
+      "description": "macOS-specific volume consistency mode for performance tuning.",
+      "enum": [
+        "delegated",
+        "cached",
+        "consistent"
+      ],
+      "title": "MacVolumeMode",
+      "type": "string"
+    },
+    "MountMode": {
+      "description": "Bind-mount mode for ``mounts[*]``.",
+      "enum": [
+        "rw",
+        "ro"
+      ],
+      "title": "MountMode",
+      "type": "string"
+    },
+    "MountModel": {
+      "additionalProperties": false,
+      "description": "One ``mounts[<name>]`` entry.\n\nAttributes:\n    hosted_in: app names whose containers receive the mount.\n    exec_path: absolute POSIX path inside the container.\n    mode: read-write or read-only bind-mount.\n    mac_volume: optional macOS volume consistency hint.",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "repo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repo"
+        },
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "post_clone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Post Clone"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "envs": {
+          "title": "Envs",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "init_vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Init Vars",
+          "type": "object"
+        },
+        "hosted_in": {
+          "title": "Hosted In",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
+        },
+        "exec_path": {
+          "title": "Exec Path",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/MountMode",
+          "default": "rw"
+        },
+        "mac_volume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MacVolumeMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "hosted_in",
+        "exec_path"
+      ],
+      "title": "MountModel",
+      "type": "object"
+    },
+    "ServiceMode": {
+      "description": "Run mode declared on ``apps[*].mode``.",
+      "enum": [
+        "up",
+        "oneshot",
+        "disabled"
+      ],
+      "title": "ServiceMode",
+      "type": "string"
+    },
+    "ServiceOverride": {
+      "additionalProperties": true,
+      "description": "Per-compose-service tweak inside an ``apps.<name>.services:`` map.\n\nCupli-specific fields are ``vars`` and ``ports`` — everything else is\ntreated as a docker-compose service spec and flushed verbatim to a\ngenerated ``docker-compose.inline.yml`` (it can extend an existing compose\nservice or create a brand-new one).\n\nSemantics:\n\n- ``vars`` merge on top of the parent app's ``vars`` (per-service wins).\n- ``ports`` REPLACES the parent app's list when present (``[]`` opts out).\n- Anything else (``image``, ``build``, ``command``, ``environment``,\n  ``volumes``, ``depends_on``, …) is plain compose syntax. ``${VAR}``\n  references are left untouched here and resolved by docker compose\n  against ``override.env``.",
+      "properties": {
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "ports": {
+          "title": "Ports",
+          "default": null,
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          ]
+        },
+        "image": {
+          "type": "string",
+          "description": "Image to pull or build."
+        },
+        "build": {
+          "description": "Build context: a string path, or a mapping with `context`, `dockerfile`, `args`, etc.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "context": {
+                  "type": "string"
+                },
+                "dockerfile": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "args": {
+                  "type": [
+                    "object",
+                    "array"
+                  ]
+                },
+                "labels": {
+                  "type": [
+                    "object",
+                    "array"
+                  ]
+                },
+                "cache_from": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cache_to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "network": {
+                  "type": "string"
+                },
+                "platforms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          ]
+        },
+        "command": {
+          "description": "Override the default command.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array"
+            }
+          ]
+        },
+        "entrypoint": {
+          "description": "Override the default entrypoint.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array"
+            }
+          ]
+        },
+        "environment": {
+          "description": "Environment variables. Map or list of KEY=VALUE entries.",
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "env_file": {
+          "description": "Path(s) to .env files merged into `environment`.",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "volumes": {
+          "type": "array",
+          "description": "Bind mounts / volumes (string or long-form mapping).",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "depends_on": {
+          "description": "Service dependencies. List of names or map of `name → { condition, restart, required }`.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "healthcheck": {
+          "type": "object",
+          "description": "Container healthcheck spec (test, interval, timeout, retries, start_period).",
+          "additionalProperties": true
+        },
+        "restart": {
+          "type": "string",
+          "description": "Restart policy.",
+          "enum": [
+            "no",
+            "always",
+            "on-failure",
+            "unless-stopped"
+          ]
+        },
+        "expose": {
+          "type": "array",
+          "description": "Ports exposed without publishing.",
+          "items": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "networks": {
+          "description": "Networks to attach. List or map.",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "container_name": {
+          "type": "string",
+          "description": "Container name (cupli defaults to `<space>-<service>`)."
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "working_dir": {
+          "type": "string"
+        },
+        "labels": {
+          "description": "Labels.",
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "ulimits": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "cap_add": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cap_drop": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "extra_hosts": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "tmpfs": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "stop_signal": {
+          "type": "string"
+        },
+        "stop_grace_period": {
+          "type": "string"
+        },
+        "shm_size": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "privileged": {
+          "type": "boolean"
+        },
+        "init": {
+          "type": "boolean"
+        },
+        "tty": {
+          "type": "boolean"
+        },
+        "stdin_open": {
+          "type": "boolean"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "deploy": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "platform": {
+          "type": "string"
+        },
+        "pull_policy": {
+          "type": "string"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "configs": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          }
+        }
+      },
+      "title": "ServiceOverride",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Schema for `space.cupli.yaml` — the cupli workspace specification.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+      "title": "Name",
+      "type": "string"
+    },
+    "cupli_min": {
+      "default": "0.1.0",
+      "maxLength": 16,
+      "minLength": 1,
+      "pattern": "^(?:(\\d+)\\.)?(?:(\\d+)\\.)?(\\*|\\d+)$",
+      "title": "Cupli Min",
+      "type": "string"
+    },
+    "cupli_max": {
+      "default": "*",
+      "maxLength": 16,
+      "minLength": 1,
+      "pattern": "^(?:(\\d+)\\.)?(?:(\\d+)\\.)?(\\*|\\d+)$",
+      "title": "Cupli Max",
+      "type": "string"
+    },
+    "extends": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extends"
+    },
+    "envs": {
+      "title": "Envs",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "vars": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Vars",
+      "type": "object"
+    },
+    "bases": {
+      "title": "Bases",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "patternProperties": {
+            "^[A-Za-z][A-Za-z0-9_-]*$": {
+              "$ref": "#/$defs/BaseAppModel"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 64,
+            "minLength": 1
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "apps": {
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "$ref": "#/$defs/AppModel"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Apps",
+      "type": "object"
+    },
+    "mounts": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "$ref": "#/$defs/MountModel"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Mounts",
+      "type": "object"
+    },
+    "hooks": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "$ref": "#/$defs/HooksOverride"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Hooks",
+      "type": "object"
+    },
+    "commands": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "$ref": "#/$defs/CommandShortcut"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Commands",
+      "type": "object"
+    },
+    "networks": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Networks",
+      "type": "object"
+    }
+  },
+  "required": [
+    "name",
+    "apps"
+  ],
+  "title": "cupli space",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

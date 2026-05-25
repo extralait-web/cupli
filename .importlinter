@@ -1,0 +1,14 @@
+[importlinter]
+root_packages =
+    cupli
+
+[importlinter:contract:layers]
+name = Cupli layered architecture
+type = layers
+layers =
+    cupli.cli
+    cupli.services
+    cupli.core
+    cupli.domain
+    cupli.utils
+exhaustive = false

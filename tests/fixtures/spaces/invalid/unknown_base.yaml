@@ -1,0 +1,4 @@
+name: unknown-base
+apps:
+  api:
+    bases: [does_not_exist]

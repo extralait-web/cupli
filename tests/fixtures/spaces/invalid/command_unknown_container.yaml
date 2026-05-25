@@ -1,0 +1,7 @@
+name: command-unknown-container
+apps:
+  api: {}
+commands:
+  lint:
+    container: nope
+    run: ruff check .

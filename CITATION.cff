@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: cupli
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+version: 0.1.0
+date-released: '2026-05-25'
+authors:
+  - given-names: Valerii
+    family-names: Abbakumov
+    email: tehnolog1999@gmail.com
+repository-code: 'https://github.com/extralait-web/cupli'
+url: 'https://github.com/extralait-web/cupli'
+abstract: >-
+  cupli is a multi-repository docker-compose workspace
+  orchestrator. One `space.cupli.yaml` declares apps, bases,
+  mounts, networks and command shortcuts across many git
+  repositories; `cupli up` brings the whole stack online
+  with a single command. It builds on docker-compose
+  without replacing it.
+keywords:
+  - cupli
+  - docker
+  - docker-compose
+  - monorepo
+  - multi-repo
+  - workspace
+  - orchestrator
+  - devtools
+  - cli
+license: MIT
