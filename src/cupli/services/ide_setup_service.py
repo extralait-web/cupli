@@ -22,7 +22,7 @@ IdeTarget = Literal["vscode", "pycharm", "all", "auto"]
 """Which editor configuration to write. ``"auto"`` detects from existing ``.vscode/`` / ``.idea/`` directories."""
 
 
-SCHEMA_URL_DEFAULT = "https://raw.githubusercontent.com/extralait-web/cupli/main/space.schema.json"
+SCHEMA_URL_DEFAULT = "https://raw.githubusercontent.com/extralait-web/cupli/master/space.schema.json"
 """Fallback location used when no local ``space.schema.json`` exists next to the workspace."""
 
 

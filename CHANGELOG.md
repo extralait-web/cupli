@@ -1,3 +1,26 @@
+# v0.1.2
+
+Hotfix release that fixes broken GitHub URLs scaffolded into user workspaces
+and surfaced by the IDE-setup command. The earlier ``v0.1.1`` tag was the
+intended hotfix but never reached PyPI, so the same payload ships under
+``v0.1.2`` alongside this URL fix.
+
+## Fixes
+
+* **Scaffolded `space.cupli.yaml` and IDE-setup link to `master`.** The
+  default branch of `extralait-web/cupli` is `master`, but the
+  `yaml-language-server` `$schema=` URL, the README reference comment in
+  the scaffolded space, and `SCHEMA_URL_DEFAULT` all pointed at
+  `https://raw.githubusercontent.com/extralait-web/cupli/main/…`, which
+  404s. All three references now use `/master/`.
+
+## Tests
+
+* Coverage raised above the smokeshow gate (80%) with new unit and CLI
+  suites for ``utils/json``, ``utils/subprocess``, ``utils/git``,
+  ``domain/runtime``, ``core/cache``, ``cli/diagnostics``,
+  ``cli/lifecycle``, ``cli/git`` and ``cli/_completion``.
+
 # v0.1.1
 
 Hotfix release on top of v0.1.0 to make CI green on a fresh runner and on

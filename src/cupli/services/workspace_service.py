@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 
 SPACE_TEMPLATE = """\
-# yaml-language-server: $schema=https://raw.githubusercontent.com/extralait-web/cupli/main/space.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/extralait-web/cupli/master/space.schema.json
 # space.cupli.yaml — scaffolded by `cupli init`.
 #
 # Quick-start:
@@ -41,7 +41,7 @@ SPACE_TEMPLATE = """\
 #   cupli logs <svc> -f      # tail logs
 #   cupli down               # tear down
 #
-# Reference: https://github.com/extralait-web/cupli/blob/main/README.md
+# Reference: https://github.com/extralait-web/cupli/blob/master/README.md
 # Editing as an AI agent? See AGENTS.md.
 
 schema_version: 1
