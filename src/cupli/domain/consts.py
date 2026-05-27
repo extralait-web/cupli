@@ -29,9 +29,14 @@ VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:(\d+)\.)?(?:(\d+)\.)?
 CUPLI_SPACE_FILE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?:.+\.)?cupli\.ya?ml$")
 """Filename pattern for auto-detected space files in the current directory."""
 VAR_REF_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}",
+    r"\$\$"
+    r"|\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}"
+    r"|\$(?P<bare>[A-Za-z_][A-Za-z0-9_]*)",
 )
-"""Pattern recognised by the env resolver: ``${VAR}`` and ``${VAR:-default}``."""
+"""Pattern recognised by the env resolver.
+
+Matches ``${VAR}``, ``${VAR:-default}`` and bare ``$VAR`` references; ``$$`` is
+an escape for a literal ``$`` (docker-compose convention)."""
 
 DEFAULT_APPS_DIR: Final[str] = "src/apps"
 """Default folder name for app checkouts (relative to ``SPACE_PATH``)."""

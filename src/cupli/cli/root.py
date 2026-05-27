@@ -8,12 +8,15 @@ mounts/diagnostics are registered in later milestones.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import typer
+from typer.core import TyperGroup
 
 if TYPE_CHECKING:
     from types import ModuleType
+
+    import click
 
     from cupli.core.cache import CachedCommandRow
 
@@ -208,33 +211,52 @@ app.command(name="init", help="Scaffold a new cupli space.", rich_help_panel=PAN
 
 
 def _register_lifecycle() -> None:
-    """Wire lifecycle commands; in a function to keep root imports light."""
+    """Wire lifecycle commands; in a function to keep root imports light.
+
+    Compose-wrapping verbs use ``ignore_unknown_options`` so unknown flags
+    (e.g. ``cupli up --force-recreate``) are forwarded to docker compose.
+    """
     from cupli.cli import lifecycle
 
-    app.command(name="up", help="Bring services up (docker compose up).", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.up_command,
-    )
-    app.command(name="down", help="Tear services down (docker compose down).", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.down_command,
-    )
-    app.command(name="stop", help="Stop running services.", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.stop_command,
-    )
-    app.command(name="restart", help="Restart services (--hard recreates).", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.restart_command,
-    )
-    app.command(name="ps", help="Show running services.", rich_help_panel=PANEL_LIFECYCLE)(
+    passthrough = {"ignore_unknown_options": True, "allow_extra_args": True}
+    app.command(
+        name="up",
+        help="Bring services up (docker compose up).",
+        rich_help_panel=PANEL_LIFECYCLE,
+        context_settings=passthrough,
+    )(lifecycle.up_command)
+    app.command(
+        name="down",
+        help="Tear services down (docker compose down).",
+        rich_help_panel=PANEL_LIFECYCLE,
+        context_settings=passthrough,
+    )(lifecycle.down_command)
+    app.command(
+        name="stop", help="Stop running services.", rich_help_panel=PANEL_LIFECYCLE, context_settings=passthrough
+    )(lifecycle.stop_command)
+    app.command(
+        name="restart",
+        help="Restart services (--hard recreates).",
+        rich_help_panel=PANEL_LIFECYCLE,
+        context_settings=passthrough,
+    )(lifecycle.restart_command)
+    app.command(
+        name="ps", help="Show running services.", rich_help_panel=PANEL_LIFECYCLE, context_settings=passthrough
+    )(
         lifecycle.ps_command,
     )
-    app.command(name="logs", help="Stream service logs (no service = all).", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.logs_command,
-    )
-    app.command(name="build", help="Build service images.", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.build_command,
-    )
-    app.command(name="pull", help="Pull service images.", rich_help_panel=PANEL_LIFECYCLE)(
-        lifecycle.pull_command,
-    )
+    app.command(
+        name="logs",
+        help="Stream service logs (no service = all).",
+        rich_help_panel=PANEL_LIFECYCLE,
+        context_settings=passthrough,
+    )(lifecycle.logs_command)
+    app.command(
+        name="build", help="Build service images.", rich_help_panel=PANEL_LIFECYCLE, context_settings=passthrough
+    )(lifecycle.build_command)
+    app.command(
+        name="pull", help="Pull service images.", rich_help_panel=PANEL_LIFECYCLE, context_settings=passthrough
+    )(lifecycle.pull_command)
     app.command(name="compose", help="Pass-through to docker compose.", rich_help_panel=PANEL_LIFECYCLE)(
         lifecycle.compose_command,
     )
@@ -262,16 +284,8 @@ def _register_exec() -> None:
     app.command(name="watch", help="docker compose watch — react to source changes.", rich_help_panel=PANEL_LIFECYCLE)(
         exec_mod.watch_command,
     )
-    app.command(
-        name="sc",
-        help="Run a workspace command from `commands:` (no name = list).",
-        rich_help_panel=PANEL_EXEC,
-        # Let declared-arg flags (e.g. `cupli sc migrate --fake`) reach the
-        # command's own parser instead of being rejected by `sc`.
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )(
-        exec_mod.shortcut_command,
-    )
+    # `sc` is registered as a Typer group in `_register_shortcuts` so each
+    # workspace command becomes a typed `cupli sc <name>` subcommand.
     app.command(
         name="upgrade-config",
         help="Migrate space.cupli.yaml to the current schema.",
@@ -338,21 +352,66 @@ _register_diagnostics()
 _register_dashboard()
 
 
-def _register_top_level_shortcuts() -> None:
-    """Promote workspace ``commands:`` entries with ``top_level: true`` to verbs.
+class _ShortcutGroup(TyperGroup):
+    """``sc`` group whose subcommands resolve live from the active space.
 
-    Source of truth is the per-space cache written by
-    :func:`cupli.core.loader.load_space`; that means the first run of any
-    cupli command warms the cache, and the next invocation sees the shortcuts
-    at top level. Commands without ``top_level: true`` stay reachable only
-    via ``cupli sc <name>``.
+    Each ``cupli sc <name>`` is built on the fly from ``commands.<name>`` in the
+    space resolved for the current invocation (``-f`` / ``-s`` / cwd), so it
+    works with an explicit space, a cold cache, or a freshly edited YAML — and
+    the declared args parse, ``--help``, and tab-complete.
+    """
 
-    Collisions with builtin command names are silently skipped — a workspace
-    can never override ``up`` or ``down``.
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        import click as _click
+
+        from cupli.cli import exec as exec_mod
+
+        typer_ctx = cast("typer.Context", ctx)
+        built = exec_mod.build_sc_command(typer_ctx, cmd_name)
+        if built is not None:
+            return built
+        fallback = super().get_command(ctx, cmd_name)
+        if fallback is not None or ctx.resilient_parsing:
+            return fallback
+        suggestions = exec_mod.shortcut_suggestions(typer_ctx, cmd_name)
+        hint = f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
+        raise _click.UsageError(f"no such workspace command '{cmd_name}'.{hint}", ctx)
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        from cupli.cli import exec as exec_mod
+
+        names = set(super().list_commands(ctx))
+        names.update(exec_mod.live_shortcut_names(cast("typer.Context", ctx)))
+        return sorted(names)
+
+
+def _register_shortcuts() -> None:
+    """Register the ``sc`` group and promote ``top_level`` commands to verbs.
+
+    ``cupli sc <name>`` subcommands resolve live from the active space (see
+    :class:`_ShortcutGroup`). Commands with ``top_level: true`` are ALSO
+    promoted to a first-class ``cupli <name>`` verb from the per-space cache
+    (collisions with builtin commands are silently skipped): the first run in a
+    workspace warms the cache, the next sees the promoted verb.
     """
     from cupli.cli import exec as exec_mod
     from cupli.core import cache, registry
     from cupli.domain.consts import COMMANDS_PANEL_TITLE
+
+    sc_app = typer.Typer(
+        cls=_ShortcutGroup,
+        no_args_is_help=False,
+        help="Run a workspace command from `commands:` (no name = list).",
+    )
+
+    @sc_app.callback(invoke_without_command=True)
+    @suppress_known_exceptions
+    def _sc_root(ctx: typer.Context) -> None:
+        """List declared workspace commands when invoked without a subcommand."""
+        if ctx.invoked_subcommand is None:
+            exec_mod.shortcut_command(ctx, name=None, extra=None)
+
+    app.add_typer(sc_app, name="sc", rich_help_panel=PANEL_EXEC)
 
     try:
         detected = registry.detect_current_space(Path.cwd())
@@ -362,46 +421,59 @@ def _register_top_level_shortcuts() -> None:
     if cached is None or not cached.commands:
         return
 
+    builtin_names = _builtin_command_names()
+    for shortcut_name, spec in cached.commands.items():
+        if spec.get("top_level") and shortcut_name not in builtin_names:
+            _safe_wire(app, exec_mod, shortcut_name, spec, COMMANDS_PANEL_TITLE)
+
+
+def _builtin_command_names() -> set[str]:
+    """Return the set of command names already registered on the root app."""
     import click
 
     click_command = typer.main.get_command(app)
-    builtin_names: set[str] = set()
     if isinstance(click_command, click.Group):
-        builtin_names = set(click_command.commands)
-
-    for shortcut_name, spec in cached.commands.items():
-        if not spec.get("top_level"):
-            continue
-        if shortcut_name in builtin_names:
-            continue
-        # A malformed or stale cache row must never break `cupli` at import:
-        # skip a shortcut that cannot be wired rather than raising.
-        try:
-            _wire_top_level_shortcut(exec_mod, shortcut_name, spec, COMMANDS_PANEL_TITLE)
-        except (ValueError, KeyError, TypeError):
-            continue
+        return set(click_command.commands)
+    return set()
 
 
-def _wire_top_level_shortcut(
+def _safe_wire(
+    target: typer.Typer,
     exec_mod: ModuleType,
     shortcut_name: str,
     spec: CachedCommandRow,
     default_panel: str,
 ) -> None:
-    """Wire one ``commands.<name>`` entry as a top-level typer command.
+    """Wire a shortcut onto ``target``; skip silently on a malformed cache row.
 
-    A command with declared ``args`` is registered with a synthetic typed
-    signature so its arguments/options appear in ``cupli <name> --help``;
-    otherwise it keeps the simple pass-through form. The ``group`` label (when
-    set) becomes the help panel.
+    A stale or hand-edited cache must never break ``cupli`` at import time.
+    """
+    try:
+        _wire_shortcut(target, exec_mod, shortcut_name, spec, default_panel)
+    except (ValueError, KeyError, TypeError):
+        return
+
+
+def _wire_shortcut(
+    target: typer.Typer,
+    exec_mod: ModuleType,
+    shortcut_name: str,
+    spec: CachedCommandRow,
+    default_panel: str,
+) -> None:
+    """Register one ``commands.<name>`` entry onto ``target``.
+
+    A command with declared ``args`` gets a synthetic typed signature so its
+    arguments/options appear in ``--help`` and tab-complete; otherwise it keeps
+    the simple pass-through form. The ``group`` label becomes the help panel.
     """
     panel = spec.get("group") or default_panel
     help_text = spec.get("help") or _default_shortcut_help(spec)
     arg_rows = spec.get("args") or []
     if arg_rows:
-        _wire_typed_shortcut(exec_mod, shortcut_name, arg_rows, help_text, panel)
+        _wire_typed_shortcut(target, exec_mod, shortcut_name, arg_rows, help_text, panel, bool(spec.get("strict")))
         return
-    _wire_plain_shortcut(exec_mod, shortcut_name, help_text, panel)
+    _wire_plain_shortcut(target, exec_mod, shortcut_name, help_text, panel)
 
 
 def _default_shortcut_help(spec: CachedCommandRow) -> str:
@@ -415,7 +487,13 @@ def _shortcut_func_name(shortcut_name: str) -> str:
     return f"shortcut_{shortcut_name.replace('-', '_').replace('.', '_')}"
 
 
-def _wire_plain_shortcut(exec_mod: ModuleType, shortcut_name: str, help_text: str, panel: str) -> None:
+def _wire_plain_shortcut(
+    target: typer.Typer,
+    exec_mod: ModuleType,
+    shortcut_name: str,
+    help_text: str,
+    panel: str,
+) -> None:
     """Register a no-args shortcut: extra tokens pass through to the command."""
 
     @suppress_known_exceptions
@@ -430,17 +508,23 @@ def _wire_plain_shortcut(exec_mod: ModuleType, shortcut_name: str, help_text: st
 
     _runner.__name__ = _shortcut_func_name(shortcut_name)
     _runner.__doc__ = help_text
-    app.command(name=shortcut_name, help=help_text, rich_help_panel=panel)(_runner)
+    target.command(name=shortcut_name, help=help_text, rich_help_panel=panel)(_runner)
 
 
 def _wire_typed_shortcut(
+    target: typer.Typer,
     exec_mod: ModuleType,
     shortcut_name: str,
     arg_rows: list[dict[str, Any]],
     help_text: str,
     panel: str,
+    strict: bool,
 ) -> None:
-    """Register a shortcut with declared args as a typed top-level command."""
+    """Register a shortcut with declared args as a typed command on ``target``.
+
+    When not ``strict``, the command ignores unknown options so undeclared
+    tokens reach ``ctx.args`` and are forwarded to the end of the run.
+    """
     from cupli.cli._shortcuts import build_signature, specs_from_cache
 
     signature, annotations = build_signature(specs_from_cache(arg_rows))
@@ -453,10 +537,11 @@ def _wire_typed_shortcut(
     runner.__annotations__ = annotations
     runner.__name__ = _shortcut_func_name(shortcut_name)
     runner.__doc__ = help_text
-    app.command(name=shortcut_name, help=help_text, rich_help_panel=panel)(runner)
+    context_settings = None if strict else {"ignore_unknown_options": True, "allow_extra_args": True}
+    target.command(name=shortcut_name, help=help_text, rich_help_panel=panel, context_settings=context_settings)(runner)
 
 
-_register_top_level_shortcuts()
+_register_shortcuts()
 
 
 __all__ = ("app",)

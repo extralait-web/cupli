@@ -83,8 +83,17 @@ files.
   `command`, `environment`, `depends_on`, `healthcheck`, `volumes`,
   `restart`, `ulimits`, `cap_add`, etc.). Cupli only intercepts
   `vars` and `ports`.
-* **Use `${VAR}` and `${VAR:-default}` for interpolation.** Bareword
-  `$VAR` is not recognised.
+* **Use `${VAR}`, `${VAR:-default}`, or bare `$VAR` for interpolation.**
+  Prefer the braced form next to other text. `$$` is an escape for a literal
+  `$` (docker-compose convention), so a value containing a real `$` must
+  double it (e.g. a password `p$$w0rd`).
+* **`envs:` file VALUES are interpolated by cupli too.** A value inside an env
+  file may reference the cupli scope — top-level `vars`, top-level `envs`, and
+  earlier env layers in the same component — e.g. `back.env` containing
+  `DATABASE_URL=postgres://db:${POSTGRES_PORT}/app` resolves `${POSTGRES_PORT}`
+  from `vars`. So port-dependent wiring and credential reuse CAN live in env
+  files, not only in `vars:`. (Resolution order: process-env → space auto-vars
+  → space `envs` → space `vars` → base `envs`/`vars` → app `envs`/`vars`.)
 * **Use auto-vars when referring to paths:**
     * `${SPACE_PATH}`, `${APPS_PATH}`, `${BASES_PATH}`, `${MOUNTS_PATH}`,
       `${LOCALS_PATH}` — space scope.
@@ -332,9 +341,21 @@ Rules for `commands:`:
   (letters, digits, `_`; no `-`).
 * **`group`** — label that becomes a help panel for top-level commands and
   groups the `cupli sc` listing.
-* When `args` are declared, trailing tokens are parsed against them (no `$@`
-  passthrough). Without `args`, a single-line `run` still gets `"$@"` appended
-  so `cupli sc test -k foo` forwards extra tokens.
+* **`strict`** — when False (default), CLI tokens not matching a declared `arg`
+  (flags and positionals) are forwarded verbatim to the end of the command, so
+  `cupli sc deploy prod --force-recreate` runs `deploy prod --force-recreate`.
+  Set `strict: true` to reject unknown tokens instead. Without any `args`, a
+  single-line `run` still gets `"$@"` appended so `cupli sc test -k foo`
+  forwards extra tokens.
+* Every command is reachable as `cupli sc <name>` (resolved live from the
+  active space, so it works with `-f` / `-s` and a cold cache); `top_level:
+  true` ALSO promotes it to a `cupli <name>` verb. Both forms parse the typed
+  `args`, show them in `--help`, and tab-complete.
+
+Builtin compose verbs (`cupli up`, `down`, `build`, `pull`, `stop`, `restart`,
+`ps`, `logs`) also forward unknown flags to docker compose — e.g.
+`cupli up --force-recreate`. Use the `--opt=value` form for value-taking flags
+so the value is not read as a service name.
 
 ### "Declare a named volume / build secret for an inline service"
 

@@ -319,6 +319,10 @@ class CommandShortcut(_Frozen):
         args: declared parameters surfaced as typed CLI arguments/options and
             substituted into ``run`` via ``{{name}}`` placeholders. A bare list
             of names is shorthand for required positional string arguments.
+        strict: when False (default), CLI tokens not matching a declared ``arg``
+            are forwarded verbatim to the end of the command (flags and
+            positionals alike); when True, an unknown token is rejected. Only
+            relevant when ``args`` is declared.
     """
 
     container: NameList = Field(min_length=1)
@@ -329,6 +333,7 @@ class CommandShortcut(_Frozen):
     group: str | None = None
     execute: ExecuteMode = ExecuteMode.SEQUENTIAL
     args: Annotated[list[CommandArg], BeforeValidator(_args_shorthand_to_dicts)] = Field(default_factory=list)
+    strict: bool = False
 
     @model_validator(mode="after")
     def _validate_args(self) -> Self:
@@ -463,7 +468,7 @@ class MountModel(_Component):
     def _validate_exec_path(self) -> Self:
         """``exec_path`` must be absolute (or start with a ``${VAR}`` ref)."""
         value = self.exec_path
-        if value.startswith("${"):
+        if value.startswith("$"):
             return self
         if not value.startswith("/"):
             raise ValueError(

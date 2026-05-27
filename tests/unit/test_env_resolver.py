@@ -97,9 +97,20 @@ def test_substitute_detects_indirect_cycle() -> None:
     assert exc_info.value.code == "E014"
 
 
-def test_substitute_leaves_unrecognised_syntax_alone() -> None:
-    """Bare ``$VAR`` (no braces) is left untouched."""
-    assert substitute("path=$HOME", {"HOME": "/h"}) == "path=$HOME"
+def test_substitute_expands_bare_var() -> None:
+    """Bare ``$VAR`` (no braces) is expanded like ``${VAR}``."""
+    assert substitute("path=$HOME", {"HOME": "/h"}) == "path=/h"
+
+
+def test_substitute_escapes_double_dollar() -> None:
+    """``$$`` is an escape for a literal ``$`` and is not treated as a ref."""
+    assert substitute("price=$$5", {}) == "price=$5"
+    assert substitute("$$HOME", {"HOME": "/h"}) == "$HOME"
+
+
+def test_substitute_bare_var_stops_at_non_word_char() -> None:
+    """A bare reference ends at the first non-identifier character."""
+    assert substitute("$HOME/sub", {"HOME": "/h"}) == "/h/sub"
 
 
 def test_substitute_preserves_text_around_refs() -> None:
@@ -155,6 +166,26 @@ def test_load_env_file_parses_basic_dotenv(tmp_path: Path) -> None:
 def test_load_env_file_missing_returns_empty(tmp_path: Path) -> None:
     """A missing env file resolves to an empty dict."""
     assert load_env_file(tmp_path / "nope") == {}
+
+
+def test_load_env_file_keeps_refs_raw_for_cupli_interpolation(tmp_path: Path) -> None:
+    """``${VAR}`` inside an env value is kept raw (not pre-expanded by dotenv).
+
+    python-dotenv would otherwise collapse a reference to an unknown variable
+    to an empty string; cupli must own interpolation so the value resolves
+    against the cupli scope in :func:`merge_scopes`.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text("DB=host:${PORT}\nBARE=host:$PORT\n", encoding="utf-8")
+    assert load_env_file(env_file) == {"DB": "host:${PORT}", "BARE": "host:$PORT"}
+
+
+def test_env_layer_value_interpolates_against_scope(tmp_path: Path) -> None:
+    """An env-file value resolves ``${VAR}`` against an earlier scope layer."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("DB=host:${PORT}\n", encoding="utf-8")
+    merged = merge_scopes([{"PORT": "5432"}, load_env_file(env_file)])
+    assert merged["DB"] == "host:5432"
 
 
 def test_filter_process_env_excludes_unlisted_keys(monkeypatch: pytest.MonkeyPatch) -> None:

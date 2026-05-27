@@ -341,6 +341,7 @@ apps:
 | `group` | string | — | Label; groups the command under a panel in `cupli --help` and the `cupli sc` listing. |
 | `execute` | enum | `sequential` | For a multi-container command: `sequential` (fail-fast), `continue` (run all, non-zero if any failed), or `parallel`. |
 | `args` | list[arg] | `[]` | Declared, typed parameters surfaced in `cupli <cmd> --help` and substituted into `run` via `{{name}}`. A bare list of names is shorthand for required positional string args. |
+| `strict` | bool | `false` | When false, CLI tokens not matching a declared `arg` (flags + positionals) are forwarded to the end of the command; when true, unknown tokens are rejected. |
 
 #### `commands.<name>.args[]`
 
@@ -402,8 +403,8 @@ bases and mounts. Override per-component with an explicit `path:`.
 
 ### Interpolation rules
 
-* `${VAR}` and `${VAR:-literal-default}` only; bareword `$VAR` is not
-  recognised.
+* `${VAR}`, `${VAR:-literal-default}`, and bare `$VAR` are all recognised.
+  `$$` escapes a literal `$` (docker-compose convention).
 * Nested `${...}` inside a default is **not** supported. The default is
   literal.
 * Cycles raise `E014`.

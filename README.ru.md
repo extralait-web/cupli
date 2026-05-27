@@ -341,6 +341,7 @@ apps:
 | `group` | string | — | Метка; группирует команду в панель в `cupli --help` и в листинге `cupli sc`. |
 | `execute` | enum | `sequential` | Для мульти-контейнерной команды: `sequential` (fail-fast), `continue` (выполнить все, ненулевой если хоть один упал), `parallel`. |
 | `args` | list[arg] | `[]` | Типизированные параметры, видны в `cupli <cmd> --help` и подставляются в `run` через `{{name}}`. Голый список имён — сокращение для обязательных позиционных string-аргументов. |
+| `strict` | bool | `false` | Если false — токены, не совпавшие с объявленным `arg` (флаги и позиционные), пробрасываются в конец команды; если true — неизвестные токены отвергаются. |
 
 #### `commands.<name>.args[]`
 
@@ -402,7 +403,8 @@ bases и mounts. Override per-component через явный `path:`.
 
 ### Правила interpolation
 
-* `${VAR}` и `${VAR:-literal-default}`; bareword `$VAR` НЕ распознаётся.
+* `${VAR}`, `${VAR:-literal-default}` и bare `$VAR` распознаются. `$$` —
+  экранирование литерального `$` (соглашение docker-compose).
 * Вложенные `${...}` внутри default'а НЕ поддерживаются — default literal.
 * Циклы → `E014`.
 * Unknown vars → `""` + жёлтый warning. С `--strict-vars` → hard error (`E016`).

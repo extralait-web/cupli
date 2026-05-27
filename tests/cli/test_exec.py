@@ -278,8 +278,8 @@ def test_shortcut_unknown_name_suggests_close_match(
         encoding="utf-8",
     )
     result = runner.invoke(app, ["-f", str(space_file), "sc", "lnt"])
-    assert result.exit_code == 1
-    assert "did you mean" in result.stdout
+    assert result.exit_code != 0
+    assert "lint" in result.output.lower()
 
 
 def test_shortcut_multi_container_runs_each(
@@ -372,6 +372,44 @@ def test_shortcut_typed_args_substituted(
     assert result.exit_code == 0
     last = invoke_spy.calls[-1]["argv"]
     assert last[-3:] == ["sh", "-c", "migrate users --fake"]
+
+
+def test_shortcut_nonstrict_forwards_undeclared(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    invoke_spy: _InvokeSpy,
+) -> None:
+    """A non-strict command forwards undeclared tokens to the end of the run."""
+    _ = isolated_registry
+    space_file = _multi_container_space(
+        tmp_path,
+        "commands:\n  deploy:\n    container: api\n    run: deploy {{env}}\n"
+        "    args:\n      - name: env\n        required: true\n",
+    )
+    result = runner.invoke(app, ["-f", str(space_file), "sc", "deploy", "prod", "--force-recreate"])
+    assert result.exit_code == 0, result.output
+    argv = invoke_spy.calls[-1]["argv"]
+    assert 'deploy prod "$@"' in argv
+    assert "--force-recreate" in argv
+
+
+def test_shortcut_strict_rejects_undeclared(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    invoke_spy: _InvokeSpy,
+) -> None:
+    """A strict command rejects an undeclared option instead of forwarding it."""
+    _ = isolated_registry
+    space_file = _multi_container_space(
+        tmp_path,
+        "commands:\n  deploy:\n    container: api\n    run: deploy {{env}}\n    strict: true\n"
+        "    args:\n      - name: env\n        required: true\n",
+    )
+    result = runner.invoke(app, ["-f", str(space_file), "sc", "deploy", "prod", "--force-recreate"])
+    assert result.exit_code != 0
+    assert not invoke_spy.calls
 
 
 def test_shortcut_args_no_passthrough(

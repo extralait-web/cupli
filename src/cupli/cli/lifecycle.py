@@ -27,6 +27,22 @@ def _plan(ctx: typer.Context, services: list[str], tags: list[str], mode: DepMod
     return resolved, make_plan(resolved, services=services, tags=tags, mode=mode)
 
 
+def _compose_passthrough(ctx: typer.Context, services: list[str] | None) -> tuple[list[str], list[str]]:
+    """Split forwarded docker-compose flags from real service names.
+
+    With ``ignore_unknown_options`` set on the command, unrecognised tokens land
+    either in the ``services`` positional or in ``ctx.args`` depending on their
+    position. Both are combined and partitioned by a leading dash: ``-`` / ``--``
+    tokens are forwarded to docker compose verbatim, the rest are service names.
+    Value-taking flags should use the ``--opt=value`` form so the value is not
+    mistaken for a service name.
+    """
+    tokens = [*(services or []), *ctx.args]
+    flags = [token for token in tokens if token.startswith("-")]
+    names = [token for token in tokens if not token.startswith("-")]
+    return flags, names
+
+
 def _parse_mode(raw: str | None) -> DepMode | None:
     """Coerce a CLI ``--mode`` value to a :class:`DepMode`."""
     if raw is None:
@@ -57,14 +73,16 @@ def up_command(
     build: Annotated[bool, typer.Option("--build", help="Build images before starting.")] = False,
     pull: Annotated[str, typer.Option("--pull", help="Pull policy: missing|always|never.")] = "missing",
 ) -> None:
-    """Bring services up (``docker compose up``)."""
-    _, plan = _plan(ctx, services or [], tag or [], _parse_mode(mode))
+    """Bring services up (``docker compose up``). Unknown flags pass through."""
+    flags, names = _compose_passthrough(ctx, services)
+    _, plan = _plan(ctx, names, tag or [], _parse_mode(mode))
     args = ["up"]
     if detach:
         args.append("-d")
     if build:
         args.append("--build")
     args.extend(["--pull", pull])
+    args.extend(flags)
     args.extend(plan.services)
     invoke(plan, args)
 
@@ -82,8 +100,9 @@ def stop_command(
     ] = None,
 ) -> None:
     """Stop services (containers remain on disk)."""
-    _, plan = _plan(ctx, services or [], tag or [])
-    invoke(plan, ["stop", *plan.services])
+    flags, names = _compose_passthrough(ctx, services)
+    _, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["stop", *flags, *plan.services])
 
 
 @suppress_known_exceptions
@@ -100,12 +119,13 @@ def restart_command(
     hard: Annotated[bool, typer.Option("--hard", help="Down + up -d (recreate containers).")] = False,
 ) -> None:
     """Restart services (``--hard`` recreates containers)."""
-    _, plan = _plan(ctx, services or [], tag or [])
+    flags, names = _compose_passthrough(ctx, services)
+    _, plan = _plan(ctx, names, tag or [])
     if hard:
         invoke(plan, ["down", "--remove-orphans"])
-        invoke(plan, ["up", "-d", *plan.services])
+        invoke(plan, ["up", "-d", *flags, *plan.services])
         return
-    invoke(plan, ["restart", *plan.services])
+    invoke(plan, ["restart", *flags, *plan.services])
 
 
 @suppress_known_exceptions
@@ -114,13 +134,15 @@ def down_command(
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Also remove volumes.")] = False,
     images: Annotated[bool, typer.Option("--images", help="Also remove built images.")] = False,
 ) -> None:
-    """Tear the workspace down (``docker compose down``)."""
+    """Tear the workspace down (``docker compose down``). Unknown flags pass through."""
+    flags, _ = _compose_passthrough(ctx, None)
     _, plan = _plan(ctx, [], [])
     args = ["down", "--remove-orphans"]
     if volumes:
         args.append("--volumes")
     if images:
         args.extend(["--rmi", "local"])
+    args.extend(flags)
     invoke(plan, args)
 
 
@@ -133,8 +155,9 @@ def ps_command(
     ] = None,
 ) -> None:
     """Show running services."""
-    _, plan = _plan(ctx, [], tag or [])
-    invoke(plan, ["ps", *plan.services])
+    flags, names = _compose_passthrough(ctx, None)
+    _, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["ps", *flags, *plan.services])
 
 
 @suppress_known_exceptions
@@ -148,12 +171,13 @@ def logs_command(
     tail: Annotated[int, typer.Option("--tail", help="Number of trailing lines.")] = 200,
 ) -> None:
     """Show service logs. Omit the name to stream all services with compose's per-service colours."""
+    flags, names = _compose_passthrough(ctx, [service] if service else [])
     _, plan = _plan(ctx, [], [])
     args = ["logs", "--tail", str(tail)]
     if follow:
         args.append("-f")
-    if service is not None:
-        args.append(service)
+    args.extend(flags)
+    args.extend(names)
     invoke(plan, args)
 
 
@@ -172,12 +196,14 @@ def build_command(
     pull: Annotated[bool, typer.Option("--pull", help="Pull base images first.")] = False,
 ) -> None:
     """Build service images."""
-    _, plan = _plan(ctx, services or [], tag or [])
+    flags, names = _compose_passthrough(ctx, services)
+    _, plan = _plan(ctx, names, tag or [])
     args = ["build"]
     if no_cache:
         args.append("--no-cache")
     if pull:
         args.append("--pull")
+    args.extend(flags)
     args.extend(plan.services)
     invoke(plan, args)
 
@@ -195,8 +221,9 @@ def pull_command(
     ] = None,
 ) -> None:
     """Pull service images."""
-    _, plan = _plan(ctx, services or [], tag or [])
-    invoke(plan, ["pull", *plan.services])
+    flags, names = _compose_passthrough(ctx, services)
+    _, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["pull", *flags, *plan.services])
 
 
 @suppress_known_exceptions

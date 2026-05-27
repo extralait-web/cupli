@@ -10,7 +10,7 @@ service's env vars but cannot run inside docker.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import click
 import typer
@@ -20,7 +20,13 @@ from cupli.cli._completion import (
     complete_service_names,
     complete_shortcut_names,
 )
-from cupli.cli._shortcuts import parse_extra, render_run, specs_from_models
+from cupli.cli._shortcuts import (
+    build_click_params,
+    parse_extra,
+    parse_extra_lenient,
+    render_run,
+    specs_from_models,
+)
 from cupli.cli.workspace import _resolve_space_path, _strict_vars
 from cupli.core.loader import load_space
 from cupli.domain.consts import COMMANDS_PANEL_TITLE
@@ -198,8 +204,98 @@ def run_shortcut_resolved(ctx: typer.Context, name: str, values: dict[str, objec
     shortcut = resolved.space.commands[name]
     _, plan = _build_plan(ctx)
     run = render_run(shortcut.run, specs_from_models(shortcut.args), values)
-    code = _run_across_containers(plan, list(shortcut.container), shortcut.workdir, run, shortcut.execute, None)
+    # Undeclared tokens land in ``ctx.args`` when the command is non-strict
+    # (registered with ignore_unknown_options); forward them verbatim.
+    passthrough = None if shortcut.strict else (list(ctx.args) or None)
+    code = _run_across_containers(plan, list(shortcut.container), shortcut.workdir, run, shortcut.execute, passthrough)
     raise typer.Exit(code=code)
+
+
+# --- live `cupli sc <name>` subcommands -------------------------------------
+
+
+def build_sc_command(ctx: typer.Context, name: str) -> click.Command | None:
+    """Build a click command for ``cupli sc <name>`` from the live space.
+
+    Resolving from the active space (``-f`` / ``-s`` / cwd) rather than the
+    cache means ``cupli sc <name>`` works with an explicit space, a cold cache,
+    or a freshly edited YAML — and the declared args parse, ``--help``, and
+    tab-complete. Returns ``None`` when ``name`` is not a declared command.
+    """
+    shortcut = _shortcut_lookup_quiet(ctx, name)
+    if shortcut is None:
+        return None
+    if not shortcut.args:
+        return _plain_sc_command(name, shortcut)
+    return _typed_sc_command(name, shortcut)
+
+
+def live_shortcut_names(ctx: typer.Context) -> list[str]:
+    """Return declared ``commands:`` names from the live space (for listing/completion)."""
+    resolved = _load_space_quiet(ctx)
+    if resolved is None:
+        return []
+    return list(resolved.space.commands)
+
+
+def shortcut_suggestions(ctx: typer.Context, name: str) -> list[str]:
+    """Return fuzzy 'did you mean' matches for an unknown ``cupli sc`` name."""
+    from cupli.utils.fuzzy import suggest
+
+    resolved = _load_space_quiet(ctx)
+    if resolved is None:
+        return []
+    return suggest(name, list(resolved.space.commands))
+
+
+def _load_space_quiet(ctx: typer.Context) -> ResolvedSpace | None:
+    """Load the active space without raising (completion/listing must stay silent)."""
+    try:
+        return load_space(_resolve_space_path(ctx), strict_vars=_strict_vars(ctx))
+    except Exception:
+        return None
+
+
+def _shortcut_lookup_quiet(ctx: typer.Context, name: str) -> CommandShortcut | None:
+    """Return the named shortcut from the live space, or ``None``."""
+    resolved = _load_space_quiet(ctx)
+    if resolved is None:
+        return None
+    return resolved.space.commands.get(name)
+
+
+def _plain_sc_command(name: str, shortcut: CommandShortcut) -> click.Command:
+    """Build a no-args ``sc`` subcommand: trailing tokens pass through verbatim."""
+
+    @suppress_known_exceptions
+    def _callback(extra: tuple[str, ...]) -> None:
+        shortcut_command(cast("typer.Context", click.get_current_context()), name=name, extra=list(extra) or None)
+
+    param = click.Argument(["extra"], nargs=-1)
+    return click.Command(
+        name=name,
+        params=[param],
+        callback=_callback,
+        help=shortcut.help,
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    )
+
+
+def _typed_sc_command(name: str, shortcut: CommandShortcut) -> click.Command:
+    """Build a ``sc`` subcommand with the shortcut's declared typed parameters."""
+
+    @suppress_known_exceptions
+    def _callback(**values: object) -> None:
+        run_shortcut_resolved(cast("typer.Context", click.get_current_context()), name, values)
+
+    settings = None if shortcut.strict else {"ignore_unknown_options": True, "allow_extra_args": True}
+    return click.Command(
+        name=name,
+        params=build_click_params(specs_from_models(shortcut.args)),
+        callback=_callback,
+        help=shortcut.help,
+        context_settings=settings,
+    )
 
 
 def _lookup_shortcut(resolved: ResolvedSpace, name: str) -> CommandShortcut:
@@ -218,25 +314,34 @@ def _lookup_shortcut(resolved: ResolvedSpace, name: str) -> CommandShortcut:
 def _execute_shortcut(plan: CompiledPlan, name: str, shortcut: CommandShortcut, extra: list[str]) -> int:
     """Render and run a shortcut, returning the aggregate exit code.
 
-    With declared ``args`` the trailing tokens are parsed and substituted into
-    ``run``; without them the tokens are appended as positional ``$@`` for
-    backward compatibility.
+    Without declared ``args`` the tokens are appended as positional ``$@``.
+    With ``args``: declared values are substituted into ``run`` via ``{{name}}``;
+    undeclared tokens are rejected when ``strict`` else forwarded to the end.
     """
     containers = list(shortcut.container)
     if not shortcut.args:
         return _run_across_containers(plan, containers, shortcut.workdir, shortcut.run, shortcut.execute, extra or None)
-    run = _render_with_args(name, shortcut, extra)
-    return _run_across_containers(plan, containers, shortcut.workdir, run, shortcut.execute, None)
+    run, passthrough = _render_with_args(name, shortcut, extra)
+    return _run_across_containers(plan, containers, shortcut.workdir, run, shortcut.execute, passthrough or None)
 
 
-def _render_with_args(name: str, shortcut: CommandShortcut, extra: list[str]) -> str:
-    """Parse ``extra`` against declared args and render the ``run`` line."""
+def _render_with_args(name: str, shortcut: CommandShortcut, extra: list[str]) -> tuple[str, list[str]]:
+    """Parse ``extra`` against declared args; render ``run`` and return leftover.
+
+    Strict commands reject undeclared tokens (empty leftover); non-strict ones
+    forward them as the leftover passthrough list.
+    """
     specs = specs_from_models(shortcut.args)
     try:
-        values = parse_extra(specs, extra)
+        if shortcut.strict:
+            return render_run(shortcut.run, specs, parse_extra(specs, extra)), []
+        values, leftover = parse_extra_lenient(specs, extra)
     except click.UsageError as exc:
-        raise CupliError("E020", name=f"command '{name}': {exc.format_message()}") from exc
-    return render_run(shortcut.run, specs, values)
+        from cupli.utils.console import error as _error
+
+        _error(f"command '{name}': {exc.format_message()}")
+        raise typer.Exit(code=2) from exc
+    return render_run(shortcut.run, specs, values), leftover
 
 
 # --- multi-container execution ---------------------------------------------
@@ -557,13 +662,16 @@ def _build_plan(ctx: typer.Context, services: list[str] | None = None):
 
 
 __all__ = (
+    "build_sc_command",
     "completion_app",
     "env_command",
     "exec_command",
+    "live_shortcut_names",
     "run_cli_command",
     "run_shortcut_resolved",
     "shell_command",
     "shortcut_command",
+    "shortcut_suggestions",
     "upgrade_config_command",
     "watch_command",
     "wrap_command",

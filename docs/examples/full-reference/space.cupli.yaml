@@ -404,12 +404,16 @@ commands:
     run: python manage.py migrate {{app}} {{fake}} --verbosity {{verbosity}}
     help: Run Django migrations for one app.
     top_level: true
+    # strict defaults to false: undeclared tokens pass through to the end, so
+    #   `cupli db-migrate users --no-input`  ->  `... migrate users --no-input`.
+    # Set `strict: true` to reject any token that is not a declared arg.
 
   # --- args shorthand: a bare list == required positional string args ---
   tail-log:
     container: api
     args: [path]                                   # equivalent to one required positional `path`
     run: tail -f {{path}}
+    strict: true                                   # reject anything other than `path`
     help: Tail a log file inside the api container.
 
   # --- run across several containers ---

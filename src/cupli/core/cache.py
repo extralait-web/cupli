@@ -36,6 +36,7 @@ class CachedCommandRow(TypedDict):
     group: str | None
     execute: str
     args: list[dict[str, Any]]
+    strict: bool
 
 
 def _cache_root() -> Path:
@@ -99,6 +100,7 @@ def _normalize_command_row(row: dict[str, Any]) -> CachedCommandRow:
         group=row.get("group"),
         execute=row.get("execute") or "sequential",
         args=row.get("args") or [],
+        strict=bool(row.get("strict")),
     )
 
 
@@ -177,6 +179,7 @@ def _serialize_command(shortcut: CommandShortcut) -> dict[str, Any]:
         "group": shortcut.group,
         "execute": shortcut.execute.value,
         "args": [arg.model_dump(mode="json") for arg in shortcut.args],
+        "strict": shortcut.strict,
     }
 
 

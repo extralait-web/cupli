@@ -407,7 +407,7 @@
     },
     "CommandShortcut": {
       "additionalProperties": false,
-      "description": "One ``commands[<name>]`` entry.\n\nBy default reachable only via ``cupli sc <name>``. Set\n``top_level: true`` to ALSO register it as a first-class ``cupli <name>``\nverb (collisions with builtin commands are ignored).\n\nAttributes:\n    container: one or more app names whose service runs the command. A bare\n        string is wrapped into a one-element list.\n    run: shell command line executed inside the container. Accepts a single\n        string (block scalars allowed) or a list of lines joined with\n        newlines. ``{{name}}`` placeholders are substituted from declared\n        ``args``.\n    workdir: working directory inside the container.\n    help: short help string shown in ``cupli --help``.\n    top_level: when True, the command is promoted to a top-level verb\n        so ``cupli <name>`` works alongside ``cupli sc <name>``.\n    group: optional label; top-level commands are grouped under it in\n        ``cupli --help`` and the ``cupli sc`` listing.\n    execute: strategy when ``container`` lists several apps — sequential\n        (fail-fast, default), continue, or parallel.\n    args: declared parameters surfaced as typed CLI arguments/options and\n        substituted into ``run`` via ``{{name}}`` placeholders. A bare list\n        of names is shorthand for required positional string arguments.",
+      "description": "One ``commands[<name>]`` entry.\n\nBy default reachable only via ``cupli sc <name>``. Set\n``top_level: true`` to ALSO register it as a first-class ``cupli <name>``\nverb (collisions with builtin commands are ignored).\n\nAttributes:\n    container: one or more app names whose service runs the command. A bare\n        string is wrapped into a one-element list.\n    run: shell command line executed inside the container. Accepts a single\n        string (block scalars allowed) or a list of lines joined with\n        newlines. ``{{name}}`` placeholders are substituted from declared\n        ``args``.\n    workdir: working directory inside the container.\n    help: short help string shown in ``cupli --help``.\n    top_level: when True, the command is promoted to a top-level verb\n        so ``cupli <name>`` works alongside ``cupli sc <name>``.\n    group: optional label; top-level commands are grouped under it in\n        ``cupli --help`` and the ``cupli sc`` listing.\n    execute: strategy when ``container`` lists several apps — sequential\n        (fail-fast, default), continue, or parallel.\n    args: declared parameters surfaced as typed CLI arguments/options and\n        substituted into ``run`` via ``{{name}}`` placeholders. A bare list\n        of names is shorthand for required positional string arguments.\n    strict: when False (default), CLI tokens not matching a declared ``arg``\n        are forwarded verbatim to the end of the command (flags and\n        positionals alike); when True, an unknown token is rejected. Only\n        relevant when ``args`` is declared.",
       "properties": {
         "container": {
           "title": "Container",
@@ -502,6 +502,11 @@
               "type": "array"
             }
           ]
+        },
+        "strict": {
+          "default": false,
+          "title": "Strict",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1104,6 +1109,306 @@
               }
             ]
           }
+        },
+        "cpus": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Number of CPUs to allocate."
+        },
+        "cpu_count": {
+          "type": "integer"
+        },
+        "cpu_percent": {
+          "type": "number"
+        },
+        "cpu_shares": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "cpu_quota": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "cpu_period": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "cpuset": {
+          "type": "string"
+        },
+        "mem_limit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "description": "Memory limit (e.g. `512m`)."
+        },
+        "mem_reservation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "mem_swappiness": {
+          "type": "integer"
+        },
+        "memswap_limit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "pids_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "oom_kill_disable": {
+          "type": "boolean"
+        },
+        "oom_score_adj": {
+          "type": "integer"
+        },
+        "cgroup": {
+          "type": "string",
+          "enum": [
+            "host",
+            "private"
+          ]
+        },
+        "cgroup_parent": {
+          "type": "string"
+        },
+        "blkio_config": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "storage_opt": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "gpus": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array"
+            }
+          ],
+          "description": "GPU reservations (`all` or a list)."
+        },
+        "network_mode": {
+          "type": "string",
+          "description": "`bridge` / `host` / `none` / `service:<name>` / `container:<name>`."
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "external_links": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns_opt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns_search": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "mac_address": {
+          "type": "string"
+        },
+        "domainname": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "string"
+        },
+        "ipc": {
+          "type": "string"
+        },
+        "uts": {
+          "type": "string"
+        },
+        "userns_mode": {
+          "type": "string"
+        },
+        "isolation": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "group_add": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        },
+        "security_opt": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "device_cgroup_rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sysctls": {
+          "description": "Kernel parameters. Map or list of KEY=VALUE entries.",
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "credential_spec": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "use_api_socket": {
+          "type": "boolean"
+        },
+        "volumes_from": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scale": {
+          "type": "integer",
+          "description": "Default number of replicas for this service."
+        },
+        "annotations": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "attach": {
+          "type": "boolean"
+        },
+        "label_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "extends": {
+          "description": "Inherit from another service (string name or `{file, service}` mapping).",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "additionalProperties": true
+            }
+          ]
+        },
+        "develop": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "`watch` rules for `docker compose watch`."
+        },
+        "post_start": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Lifecycle hooks run after start."
+        },
+        "pre_stop": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Lifecycle hooks run before stop."
         }
       },
       "title": "ServiceOverride",

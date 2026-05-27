@@ -114,8 +114,71 @@ COMPOSE_SERVICE_FIELDS: dict[str, dict[str, Any]] = {
     "pull_policy": {"type": "string"},
     "secrets": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
     "configs": {"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "object"}]}},
+    # --- resource limits / cgroup ---
+    "cpus": {"anyOf": [{"type": "number"}, {"type": "string"}], "description": "Number of CPUs to allocate."},
+    "cpu_count": {"type": "integer"},
+    "cpu_percent": {"type": "number"},
+    "cpu_shares": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    "cpu_quota": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    "cpu_period": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    "cpuset": {"type": "string"},
+    "mem_limit": {"anyOf": [{"type": "string"}, {"type": "integer"}], "description": "Memory limit (e.g. `512m`)."},
+    "mem_reservation": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+    "mem_swappiness": {"type": "integer"},
+    "memswap_limit": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+    "pids_limit": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    "oom_kill_disable": {"type": "boolean"},
+    "oom_score_adj": {"type": "integer"},
+    "cgroup": {"type": "string", "enum": ["host", "private"]},
+    "cgroup_parent": {"type": "string"},
+    "blkio_config": {"type": "object", "additionalProperties": True},
+    "storage_opt": {"type": "object", "additionalProperties": True},
+    "gpus": {"anyOf": [{"type": "string"}, {"type": "array"}], "description": "GPU reservations (`all` or a list)."},
+    # --- networking ---
+    "network_mode": {"type": "string", "description": "`bridge` / `host` / `none` / `service:<name>` / `container:<name>`."},
+    "links": {"type": "array", "items": {"type": "string"}},
+    "external_links": {"type": "array", "items": {"type": "string"}},
+    "dns_opt": {"type": "array", "items": {"type": "string"}},
+    "dns_search": {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+    "mac_address": {"type": "string"},
+    "domainname": {"type": "string"},
+    # --- process / namespaces ---
+    "pid": {"type": "string"},
+    "ipc": {"type": "string"},
+    "uts": {"type": "string"},
+    "userns_mode": {"type": "string"},
+    "isolation": {"type": "string"},
+    "runtime": {"type": "string"},
+    "group_add": {"type": "array", "items": {"type": ["string", "number"]}},
+    "security_opt": {"type": "array", "items": {"type": "string"}},
+    "device_cgroup_rules": {"type": "array", "items": {"type": "string"}},
+    "sysctls": {
+        "description": "Kernel parameters. Map or list of KEY=VALUE entries.",
+        "anyOf": [{"type": "object"}, {"type": "array", "items": {"type": "string"}}],
+    },
+    "credential_spec": {"type": "object", "additionalProperties": True},
+    "use_api_socket": {"type": "boolean"},
+    # --- volumes / scaling / lifecycle ---
+    "volumes_from": {"type": "array", "items": {"type": "string"}},
+    "scale": {"type": "integer", "description": "Default number of replicas for this service."},
+    "annotations": {"anyOf": [{"type": "object"}, {"type": "array", "items": {"type": "string"}}]},
+    "attach": {"type": "boolean"},
+    "label_file": {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+    "extends": {
+        "description": "Inherit from another service (string name or `{file, service}` mapping).",
+        "anyOf": [{"type": "string"}, {"type": "object", "additionalProperties": True}],
+    },
+    "develop": {"type": "object", "additionalProperties": True, "description": "`watch` rules for `docker compose watch`."},
+    "post_start": {"type": "array", "items": {"type": "object"}, "description": "Lifecycle hooks run after start."},
+    "pre_stop": {"type": "array", "items": {"type": "object"}, "description": "Lifecycle hooks run before stop."},
 }
-"""Common docker-compose service-level fields surfaced as completions."""
+"""Common docker-compose service-level fields surfaced as completions.
+
+Mirrors the service attributes of the compose-spec
+(https://github.com/compose-spec/compose-spec). ``additionalProperties: true``
+stays in place on ``ServiceOverride``, so anything omitted here is still
+accepted — these entries only power editor completion and hover docs.
+"""
 
 
 STRING_OR_LIST_FIELDS: frozenset[str] = frozenset({

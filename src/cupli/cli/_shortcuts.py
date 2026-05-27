@@ -146,6 +146,26 @@ def parse_extra(specs: Sequence[ArgSpec], extra: Sequence[str]) -> dict[str, obj
     return values
 
 
+def parse_extra_lenient(specs: Sequence[ArgSpec], extra: Sequence[str]) -> tuple[dict[str, object], list[str]]:
+    """Parse declared args, forwarding unknown tokens instead of rejecting them.
+
+    Returns ``(values, leftover)`` where ``leftover`` is every token (flag or
+    positional) that did not match a declared arg — to be appended verbatim to
+    the end of the command. Mirrors :func:`parse_extra` but with
+    ``ignore_unknown_options`` / ``allow_extra_args`` so the parse never errors
+    on an undeclared option.
+    """
+    command = click.Command(
+        name="sc",
+        params=build_click_params(specs),
+        callback=None,
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    )
+    context = command.make_context("sc", list(extra))
+    _check_required(specs, context.params)
+    return dict(context.params), list(context.args)
+
+
 def _check_required(specs: Sequence[ArgSpec], values: Mapping[str, object]) -> None:
     """Raise a usage error when a required argument was not supplied.
 

@@ -69,6 +69,23 @@ def test_up_includes_detach_and_build_flags(
     assert "api" in last
 
 
+def test_up_forwards_unknown_flags_to_compose(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """An unknown flag like ``--force-recreate`` is forwarded to docker compose."""
+    _ = isolated_registry
+    space = _space(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "up", "-d", "--force-recreate", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "up"
+    assert "--force-recreate" in last
+    assert "api" in last  # real service name is NOT swallowed as a flag
+
+
 def test_up_pull_policy_can_be_overridden(
     runner: CliRunner,
     tmp_path: Path,

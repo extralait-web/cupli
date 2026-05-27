@@ -212,7 +212,7 @@ def _resolve_space_scope(
 ) -> dict[str, str]:
     """Compute the space-scope variable set."""
     auto = _space_auto_vars(space, space_dir)
-    env_layers = [load_env_file(_resolve_path(item, auto, space_dir)) for item in space.envs]
+    env_layers = [_load_declared_env(_resolve_path(item, auto, space_dir), strict=strict) for item in space.envs]
     if not allow_shadow:
         check_no_shadow(space.vars, SPACE_RESERVED)
     return merge_scopes(
@@ -355,7 +355,7 @@ def _resolve_component(
     }
     if extra_auto:
         auto.update(extra_auto)
-    env_layers = [load_env_file(_resolve_path(item, outer | auto, path)) for item in component.envs]
+    env_layers = [_load_declared_env(_resolve_path(item, outer | auto, path), strict=strict) for item in component.envs]
     if not allow_shadow:
         check_no_shadow(component.vars, COMPONENT_RESERVED)
     scope = merge_scopes([outer, auto, *env_layers, dict(component.vars)], strict=strict)
@@ -393,7 +393,7 @@ def _resolve_mount(
         "MOUNT_HOST": str(path),
         "MOUNT_EXEC_PATH": exec_path,
     }
-    env_layers = [load_env_file(_resolve_path(item, outer | auto, path)) for item in mount.envs]
+    env_layers = [_load_declared_env(_resolve_path(item, outer | auto, path), strict=strict) for item in mount.envs]
     if not allow_shadow:
         check_no_shadow(mount.vars, MOUNT_RESERVED)
     scope = merge_scopes([outer, auto, *env_layers, dict(mount.vars)], strict=strict)
@@ -449,6 +449,27 @@ def _resolve_path(value: str, scope: dict[str, str], anchor: Path | str) -> Path
     if candidate.is_absolute():
         return candidate
     return (Path(anchor) / candidate).resolve()
+
+
+def _load_declared_env(path: Path, *, strict: bool) -> dict[str, str]:
+    """Load a declared ``envs:`` file into the scope; empty when it is missing.
+
+    A declared env file is loaded into the component scope and (unless it
+    shadows a reserved name) injected into the container environment. Relative
+    paths resolve against the component's own directory, not the space root —
+    a common cause of an env file "not taking effect".
+
+    A missing file is loaded as an empty layer. Optional files (``.env.local``)
+    legitimately may not exist, so this is silent by default; under
+    ``--strict-vars`` it warns to surface a misplaced path.
+    """
+    if not path.exists():
+        if strict:
+            from cupli.utils.console import warn
+
+            warn(f"declared env file not found, skipped: {path}")
+        return {}
+    return load_env_file(path)
 
 
 __all__ = (

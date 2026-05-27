@@ -46,7 +46,10 @@ def load_env_file(path: Path) -> dict[str, str]:
     """Load a dotenv-formatted file into a dict.
 
     Performs syntax parsing only — variable interpolation is the resolver's
-    job, not the loader's.
+    job, not the loader's. ``interpolate=False`` keeps ``${VAR}`` references
+    intact so they resolve against the cupli scope (top-level / base ``vars``,
+    earlier env layers) in :func:`merge_scopes`; python-dotenv's own expansion
+    would otherwise collapse cupli-scope references to empty strings.
 
     Args:
         path: absolute path to the env file.
@@ -56,7 +59,7 @@ def load_env_file(path: Path) -> dict[str, str]:
     """
     if not path.exists():
         return {}
-    raw = dotenv_values(path)
+    raw = dotenv_values(path, interpolate=False)
     return {key: value for key, value in raw.items() if value is not None}
 
 
@@ -74,7 +77,9 @@ def substitute(
     strict: bool = False,
     _seen: frozenset[str] | None = None,
 ) -> str:
-    """Expand ``${VAR}`` and ``${VAR:-default}`` references using ``scope``.
+    """Expand ``${VAR}``, ``${VAR:-default}`` and bare ``$VAR`` references.
+
+    ``$$`` is an escape for a literal ``$`` (docker-compose convention).
 
     Args:
         value: string to expand.
@@ -93,6 +98,8 @@ def substitute(
     seen = _seen if _seen is not None else frozenset()
 
     def _replace(match: re.Match[str]) -> str:
+        if match[0] == "$$":
+            return "$"
         return _expand_match(match, scope, strict=strict, seen=seen)
 
     return VAR_REF_PATTERN.sub(_replace, value)
@@ -105,8 +112,8 @@ def _expand_match(
     strict: bool,
     seen: frozenset[str],
 ) -> str:
-    """Expand a single matched ``${...}`` reference."""
-    name = match["name"]
+    """Expand a single matched ``${...}`` or bare ``$VAR`` reference."""
+    name = match["name"] or match["bare"]
     if name in seen:
         chain = " -> ".join([*seen, name])
         raise CupliError("E014", chain=chain)
@@ -120,7 +127,7 @@ def _expand_match(
         _warn_unknown_var(name)
         return ""
 
-    if "${" not in replacement:
+    if "$" not in replacement:
         return replacement
     return substitute(replacement, scope, strict=strict, _seen=seen | {name})
 
