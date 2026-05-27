@@ -1,3 +1,31 @@
+# v0.3.0
+
+Feature release extending workspace command shortcuts (`commands:`).
+
+## Features
+
+* **Command grouping.** A `group:` label groups a command under a panel in
+  `cupli --help` and in the `cupli sc` listing.
+* **Multi-line `run`.** `run` accepts a single line, a YAML block scalar, or a
+  list of lines (joined with newlines) and runs via `sh -c`. The legacy `$@`
+  passthrough is appended only for a single-line snippet with no declared args.
+* **Typed arguments.** A `commands.<name>.args` list declares typed parameters
+  (`str`/`int`/`bool`, positional or `--option`, with `help`, `short` alias,
+  `required`/`default`). For top-level promoted commands they become real typer
+  parameters shown in `cupli <name> --help`; for `cupli sc` they are parsed
+  with click. Values are substituted into `run` via `{{name}}` placeholders and
+  shell-quoted. A bare list of names is shorthand for required positional
+  string arguments.
+* **Multi-container commands.** `container:` accepts one app or a list, and a
+  new `execute:` field selects `sequential` (default, fail-fast), `continue`
+  (run all, non-zero if any failed), or `parallel` (concurrent, output
+  captured per container).
+
+## Docs
+
+* `AGENTS.md` actualized with the new command capabilities and the top-level
+  `volumes:` / `secrets:` / `configs:` blocks; READMEs now point agents at it.
+
 # v0.2.0
 
 Feature release adding three top-level docker-compose blocks to the space
