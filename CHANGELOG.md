@@ -1,3 +1,19 @@
+# v0.2.0
+
+Feature release adding three top-level docker-compose blocks to the space
+schema.
+
+## Features
+
+* **Top-level `volumes:`, `secrets:`, `configs:` blocks.** A space can now
+  declare named volumes, secret definitions and config definitions at the top
+  level alongside `networks:`. They are merged verbatim into
+  `docker-compose.pre.yml`, so inline services (`apps.<x>.service` /
+  `services`) can reference them without a separate compose file — e.g. a
+  `minio_data:/data` named volume or a `CI_JOB_TOKEN` build secret. No
+  synthetic `default` is injected and an empty block is omitted. A null body
+  (`minio_data:`) is treated as a default-driver entry.
+
 # v0.1.2
 
 Hotfix release that fixes broken GitHub URLs scaffolded into user workspaces
