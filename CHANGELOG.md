@@ -1,3 +1,23 @@
+# v0.3.1
+
+Hotfix release.
+
+## Fixes
+
+* **`click` is now a declared dependency.** `v0.3.0` imports `click` directly
+  (for the typed command-shortcut parameters), but relied on it being present
+  transitively via `typer`. In environments where `typer` does not pull `click`
+  in (e.g. a `pipx install`), `cupli` crashed on startup with
+  `ModuleNotFoundError: No module named 'click'`. `click` is now listed in the
+  project dependencies so it is always installed.
+
+## Chores
+
+* **Bumped GitHub Actions off the deprecated Node 20 runtime.** `actions/checkout`
+  → v6, `actions/setup-python` → v6, `actions/upload-artifact` → v7,
+  `actions/download-artifact` → v8, `astral-sh/setup-uv` → v7,
+  `dawidd6/action-download-artifact` → v21.
+
 # v0.3.0
 
 Feature release extending workspace command shortcuts (`commands:`).

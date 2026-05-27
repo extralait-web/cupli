@@ -153,6 +153,7 @@ toml = [
 name = "cupli"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -204,6 +205,7 @@ typechecking = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.1" },
     { name = "packaging", specifier = ">=23" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
