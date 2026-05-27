@@ -129,6 +129,7 @@ STRING_OR_LIST_FIELDS: frozenset[str] = frozenset({
     "before_start",
     "after_start",
     "after_stop",
+    "container",
 })
 """Fields whose Pydantic side accepts both a bare string and a list (auto-wrap).
 
@@ -178,6 +179,10 @@ def _patch_properties(node: Any) -> None:
             properties[name] = _wrap_anyof(definition, _deps_array_alt())
         elif name == "services":
             properties[name] = _wrap_anyof(definition, _services_list_alt())
+        elif name == "run":
+            properties[name] = _wrap_anyof(definition, _string_array_alt())
+        elif name == "args":
+            properties[name] = _wrap_anyof(definition, _string_array_alt())
 
 
 def _wrap_anyof(definition: dict[str, Any], alternative: dict[str, Any]) -> dict[str, Any]:
@@ -194,6 +199,11 @@ def _wrap_anyof(definition: dict[str, Any], alternative: dict[str, Any]) -> dict
 def _scalar_string_alt() -> dict[str, Any]:
     """The ``string`` alternative for ``_wrap_str_as_list``-style fields."""
     return {"type": "string"}
+
+
+def _string_array_alt() -> dict[str, Any]:
+    """The ``array of strings`` alternative for ``run`` lines and ``args`` shorthand."""
+    return {"type": "array", "items": {"type": "string"}}
 
 
 def _deps_array_alt() -> dict[str, Any]:

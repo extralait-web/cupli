@@ -185,12 +185,14 @@ mounts:
 commands:
 
   lint:
+    group: QA                                      # `cupli --help` shows lint/test/fmt under a "QA" panel
     container: shop-api
     run: ruff check src tests
     help: Lint the backend.
     top_level: true
 
   test:
+    group: QA
     container: shop-api
     run: pytest -xvs
     workdir: /app
@@ -198,6 +200,7 @@ commands:
     top_level: true
 
   fmt:
+    group: QA
     container: shop-api
     run: ruff format src tests
     help: Format the backend.
@@ -210,8 +213,20 @@ commands:
     top_level: false
 
   alembic-revision:
+    group: Database
     container: shop-api
-    run: alembic revision --autogenerate -m
     workdir: /app
-    help: Create a new alembic revision (append the message after the command).
+    args:
+      - name: message                              # required positional: `cupli alembic-revision "add users"`
+        help: Revision message.
+        required: true
+    run: alembic revision --autogenerate -m {{message}}
+    help: Create a new alembic revision.
+    top_level: true
+
+  pip-check:
+    container: [shop-api, migrate]                 # runs in both python services
+    execute: parallel                              # sequential (default, fail-fast) | continue | parallel
+    run: pip list --outdated
+    help: Show outdated packages in the backend and migration services.
     top_level: false

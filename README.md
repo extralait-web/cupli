@@ -49,6 +49,10 @@ on `docker compose` without replacing it.
 * **Shell completion** for every name (apps, services, mounts, tags,
   shortcuts, error codes).
 
+> 🤖 **Using an AI agent to edit `space.cupli.yaml`?** Point it at
+> [`AGENTS.md`](AGENTS.md) — a self-contained guide to the schema, service
+> binding, `commands:`, top-level blocks, and error codes.
+
 ---
 
 ## Table of contents
@@ -329,11 +333,57 @@ apps:
 
 | Key | Type | Default | What it does |
 |---|---|---|---|
-| `container` | string | required | App name whose primary service runs the command. |
-| `run` | string | required | Shell command line. |
+| `container` | string \| list[string] | required | App name(s) whose primary service runs the command. A list runs it in each. |
+| `run` | string \| list[string] | required | Shell command line. A block scalar or list of lines is joined with newlines and run via `sh -c`. `{{name}}` placeholders are filled from `args`. |
 | `workdir` | string | — | Working directory inside the container. |
 | `help` | string | — | Short help shown in `cupli --help`. |
 | `top_level` | bool | `false` | When true, also exposes as `cupli <name>` (alongside `cupli sc <name>`). |
+| `group` | string | — | Label; groups the command under a panel in `cupli --help` and the `cupli sc` listing. |
+| `execute` | enum | `sequential` | For a multi-container command: `sequential` (fail-fast), `continue` (run all, non-zero if any failed), or `parallel`. |
+| `args` | list[arg] | `[]` | Declared, typed parameters surfaced in `cupli <cmd> --help` and substituted into `run` via `{{name}}`. A bare list of names is shorthand for required positional string args. |
+
+#### `commands.<name>.args[]`
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `name` | string | required | Identifier; the `{{name}}` placeholder and CLI arg/option name. |
+| `help` | string | — | Description shown in `cupli <cmd> --help`. |
+| `type` | enum | `str` | `str`, `int`, or `bool`. A `bool` is always an option (flag). |
+| `option` | bool | `false` | When true, a `--name` option; otherwise a positional argument. |
+| `short` | string | — | Single-letter alias for an option (`l` → `-l`). |
+| `required` | bool | `false` | Whether the value must be supplied. Mutually exclusive with `default`. |
+| `default` | string | — | Value substituted when the parameter is omitted. |
+
+```yaml
+commands:
+  db-migrate:
+    group: Database                 # `cupli --help` shows it under a "Database" panel
+    container: api
+    run: python manage.py migrate {{app}} {{fake}}
+    args:
+      - name: app                   # required positional: `cupli db-migrate users`
+        required: true
+        help: Django app label.
+      - name: fake                  # bool -> a `--fake` flag
+        type: bool
+    top_level: true
+
+  pip-freeze:
+    container: [api, worker]        # run in several services
+    execute: parallel               # sequential (default) | continue | parallel
+    run: pip freeze
+```
+
+For a multi-line script, use a block scalar (newline-separated commands; add
+`&&` or `set -e` for fail-fast within the script):
+
+```yaml
+  setup:
+    container: api
+    run: |
+      python manage.py migrate
+      python manage.py loaddata initial
+```
 
 ### Auto-vars (always interpolatable)
 

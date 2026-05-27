@@ -33,13 +33,54 @@ def _make_space_file(tmp_path: Path) -> Path:
 def _make_shortcuts() -> dict[str, CommandShortcut]:
     return {
         "test": CommandShortcut(
-            container="api",
+            container=["api"],
             run="pytest",
             workdir=None,
             help="Run tests",
             top_level=True,
         ),
     }
+
+
+def test_write_serializes_new_command_fields(tmp_path: Path, isolated_cache: Path) -> None:
+    """Group / execute / multi-container / args survive a write+read roundtrip."""
+    _ = isolated_cache
+    space = _make_space_file(tmp_path)
+    shortcut = CommandShortcut.model_validate(
+        {
+            "container": ["api", "worker"],
+            "run": "migrate {{app}}",
+            "group": "Database",
+            "execute": "parallel",
+            "args": [{"name": "app", "required": True}],
+        },
+    )
+    write_commands(space, "demo", {"migrate": shortcut})
+    cached = read_commands(space)
+    assert cached is not None
+    row = cached.commands["migrate"]
+    assert row["container"] == ["api", "worker"]
+    assert row["group"] == "Database"
+    assert row["execute"] == "parallel"
+    assert row["args"][0]["name"] == "app"
+
+
+def test_read_normalizes_legacy_v1_row(tmp_path: Path, isolated_cache: Path) -> None:
+    """A legacy v1 row (string container, no new keys) is normalised on read."""
+    space = _make_space_file(tmp_path)
+    write_commands(space, "demo", _make_shortcuts())
+    cache_file = isolated_cache / "demo" / "cache.json"
+    blob = json.loads(cache_file.read_text(encoding="utf-8"))
+    blob["version"] = 1
+    blob["commands"]["test"] = {"container": "api", "run": "pytest", "top_level": True}
+    cache_file.write_text(json.dumps(blob), encoding="utf-8")
+    cached = read_commands(space)
+    assert cached is not None
+    row = cached.commands["test"]
+    assert row["container"] == ["api"]
+    assert row["args"] == []
+    assert row["execute"] == "sequential"
+    assert row["group"] is None
 
 
 def test_read_commands_returns_none_for_missing_source(tmp_path: Path, isolated_cache: Path) -> None:

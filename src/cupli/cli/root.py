@@ -8,9 +8,14 @@ mounts/diagnostics are registered in later milestones.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
+    from cupli.core.cache import CachedCommandRow
 
 from cupli.cli._completion import complete_error_codes
 from cupli.cli.container import Container
@@ -258,7 +263,12 @@ def _register_exec() -> None:
         exec_mod.watch_command,
     )
     app.command(
-        name="sc", help="Run a workspace command from `commands:` (no name = list).", rich_help_panel=PANEL_EXEC
+        name="sc",
+        help="Run a workspace command from `commands:` (no name = list).",
+        rich_help_panel=PANEL_EXEC,
+        # Let declared-arg flags (e.g. `cupli sc migrate --fake`) reach the
+        # command's own parser instead of being rejected by `sc`.
+        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     )(
         exec_mod.shortcut_command,
     )
@@ -364,14 +374,49 @@ def _register_top_level_shortcuts() -> None:
             continue
         if shortcut_name in builtin_names:
             continue
-        _wire_top_level_shortcut(exec_mod, shortcut_name, spec, COMMANDS_PANEL_TITLE)
+        # A malformed or stale cache row must never break `cupli` at import:
+        # skip a shortcut that cannot be wired rather than raising.
+        try:
+            _wire_top_level_shortcut(exec_mod, shortcut_name, spec, COMMANDS_PANEL_TITLE)
+        except (ValueError, KeyError, TypeError):
+            continue
 
 
-def _wire_top_level_shortcut(exec_mod, shortcut_name: str, spec: dict, panel: str) -> None:
-    """Wire one ``commands.<name>`` entry as a top-level typer command."""
-    container = spec.get("container") or "?"
-    run = spec.get("run") or ""
-    help_text = spec.get("help") or f"In {container}: {run}"
+def _wire_top_level_shortcut(
+    exec_mod: ModuleType,
+    shortcut_name: str,
+    spec: CachedCommandRow,
+    default_panel: str,
+) -> None:
+    """Wire one ``commands.<name>`` entry as a top-level typer command.
+
+    A command with declared ``args`` is registered with a synthetic typed
+    signature so its arguments/options appear in ``cupli <name> --help``;
+    otherwise it keeps the simple pass-through form. The ``group`` label (when
+    set) becomes the help panel.
+    """
+    panel = spec.get("group") or default_panel
+    help_text = spec.get("help") or _default_shortcut_help(spec)
+    arg_rows = spec.get("args") or []
+    if arg_rows:
+        _wire_typed_shortcut(exec_mod, shortcut_name, arg_rows, help_text, panel)
+        return
+    _wire_plain_shortcut(exec_mod, shortcut_name, help_text, panel)
+
+
+def _default_shortcut_help(spec: CachedCommandRow) -> str:
+    """Build the fallback help string from a cached command spec."""
+    containers = ", ".join(spec.get("container") or []) or "?"
+    return f"In {containers}: {spec.get('run') or ''}"
+
+
+def _shortcut_func_name(shortcut_name: str) -> str:
+    """Return a valid Python identifier for a shortcut runner function."""
+    return f"shortcut_{shortcut_name.replace('-', '_').replace('.', '_')}"
+
+
+def _wire_plain_shortcut(exec_mod: ModuleType, shortcut_name: str, help_text: str, panel: str) -> None:
+    """Register a no-args shortcut: extra tokens pass through to the command."""
 
     @suppress_known_exceptions
     def _runner(
@@ -380,13 +425,35 @@ def _wire_top_level_shortcut(exec_mod, shortcut_name: str, spec: dict, panel: st
             list[str] | None,
             typer.Argument(help="Extra args appended after the declared command."),
         ] = None,
-        _bound_name: str = shortcut_name,
     ) -> None:
-        exec_mod.shortcut_command(ctx, name=_bound_name, extra=extra)
+        exec_mod.shortcut_command(ctx, name=shortcut_name, extra=extra)
 
-    _runner.__name__ = f"shortcut_{shortcut_name.replace('-', '_').replace('.', '_')}"
+    _runner.__name__ = _shortcut_func_name(shortcut_name)
     _runner.__doc__ = help_text
     app.command(name=shortcut_name, help=help_text, rich_help_panel=panel)(_runner)
+
+
+def _wire_typed_shortcut(
+    exec_mod: ModuleType,
+    shortcut_name: str,
+    arg_rows: list[dict[str, Any]],
+    help_text: str,
+    panel: str,
+) -> None:
+    """Register a shortcut with declared args as a typed top-level command."""
+    from cupli.cli._shortcuts import build_signature, specs_from_cache
+
+    signature, annotations = build_signature(specs_from_cache(arg_rows))
+
+    def _runner(ctx: typer.Context, **values: object) -> None:
+        exec_mod.run_shortcut_resolved(ctx, shortcut_name, values)
+
+    runner = suppress_known_exceptions(_runner)
+    runner.__signature__ = signature  # type: ignore[attr-defined]
+    runner.__annotations__ = annotations
+    runner.__name__ = _shortcut_func_name(shortcut_name)
+    runner.__doc__ = help_text
+    app.command(name=shortcut_name, help=help_text, rich_help_panel=panel)(runner)
 
 
 _register_top_level_shortcuts()

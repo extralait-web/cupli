@@ -56,3 +56,17 @@ class HookKind(str, Enum):
     APP = "app"
     BASE = "base"
     MOUNT = "mount"
+
+
+class ExecuteMode(str, Enum):
+    """Execution strategy for a multi-container ``commands[*]`` shortcut.
+
+    ``SEQUENTIAL`` runs containers one by one and stops at the first failure
+    (fail-fast). ``CONTINUE`` runs every container regardless of failures and
+    reports an aggregate result. ``PARALLEL`` runs them concurrently, capturing
+    each container's output to avoid interleaving.
+    """
+
+    SEQUENTIAL = "sequential"
+    CONTINUE = "continue"
+    PARALLEL = "parallel"

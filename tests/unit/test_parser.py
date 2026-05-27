@@ -60,7 +60,7 @@ def test_parses_with_mounts_and_commands(spaces_dir: Path) -> None:
     assert sdk.mode is MountMode.RW
 
     assert model.apps["migrate"].mode is ServiceMode.ONESHOT
-    assert model.commands["lint"].container == "api"
+    assert model.commands["lint"].container == ["api"]
     assert model.commands["lint"].run == "ruff check ."
 
 

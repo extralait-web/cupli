@@ -19,10 +19,23 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from cupli.domain.models import CommandShortcut
+
+
+class CachedCommandRow(TypedDict):
+    """Serialized shape of one cached ``commands[<name>]`` entry."""
+
+    container: list[str]
+    run: str
+    workdir: str | None
+    help: str | None
+    top_level: bool
+    group: str | None
+    execute: str
+    args: list[dict[str, Any]]
 
 
 def _cache_root() -> Path:
@@ -48,17 +61,45 @@ def _file_signature(space_file: Path) -> dict[str, Any]:
     return {"mtime_ns": stat.st_mtime_ns, "sha256": digest, "size": stat.st_size}
 
 
+CACHE_VERSION = 2
+"""Cache schema version. Bumped when the serialized command shape changes."""
+
+
 @dataclass(frozen=True)
 class CachedCommands:
     """Lightweight cache row carrying just enough to register shortcuts.
 
     Attributes:
         space_name: declared name of the source space.
-        commands: ``{shortcut_name: {container, run, workdir, help}}``.
+        commands: ``{shortcut_name: {container, run, workdir, help, top_level,
+            group, execute, args}}`` where ``container`` is a list and ``args``
+            a list of arg-spec dicts.
     """
 
     space_name: str
-    commands: dict[str, dict[str, str | None]]
+    commands: dict[str, CachedCommandRow]
+
+
+def _normalize_command_row(row: dict[str, Any]) -> CachedCommandRow:
+    """Bring a cached command row up to the current shape.
+
+    Legacy ``version: 1`` rows stored ``container`` as a single string and had
+    no ``group`` / ``execute`` / ``args`` keys. Normalising on read lets an
+    unchanged old cache keep working until the source YAML is next rewritten.
+    """
+    container = row.get("container")
+    if isinstance(container, str):
+        container = [container]
+    return CachedCommandRow(
+        container=container or [],
+        run=row.get("run") or "",
+        workdir=row.get("workdir"),
+        help=row.get("help"),
+        top_level=bool(row.get("top_level")),
+        group=row.get("group"),
+        execute=row.get("execute") or "sequential",
+        args=row.get("args") or [],
+    )
 
 
 def read_commands(space_file: Path) -> CachedCommands | None:
@@ -93,7 +134,8 @@ def read_commands(space_file: Path) -> CachedCommands | None:
         commands = blob.get("commands")
         if not isinstance(commands, dict):
             return None
-        return CachedCommands(space_name=blob.get("space_name", ""), commands=commands)
+        normalized = {name: _normalize_command_row(row) for name, row in commands.items()}
+        return CachedCommands(space_name=blob.get("space_name", ""), commands=normalized)
     return None
 
 
@@ -115,22 +157,27 @@ def write_commands(
     path = _cache_path(space_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
-        "version": 1,
+        "version": CACHE_VERSION,
         "source_path": str(space_file),
         "space_name": space_name,
         "signature": sig,
-        "commands": {
-            name: {
-                "container": shortcut.container,
-                "run": shortcut.run,
-                "workdir": shortcut.workdir,
-                "help": shortcut.help,
-                "top_level": shortcut.top_level,
-            }
-            for name, shortcut in commands.items()
-        },
+        "commands": {name: _serialize_command(shortcut) for name, shortcut in commands.items()},
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _serialize_command(shortcut: CommandShortcut) -> dict[str, Any]:
+    """Serialize a :class:`CommandShortcut` to a JSON-safe cache row."""
+    return {
+        "container": list(shortcut.container),
+        "run": shortcut.run,
+        "workdir": shortcut.workdir,
+        "help": shortcut.help,
+        "top_level": shortcut.top_level,
+        "group": shortcut.group,
+        "execute": shortcut.execute.value,
+        "args": [arg.model_dump(mode="json") for arg in shortcut.args],
+    }
 
 
 def clear_cache(space_name: str | None = None) -> None:
@@ -146,4 +193,4 @@ def clear_cache(space_name: str | None = None) -> None:
     shutil.rmtree(root / space_name, ignore_errors=True)
 
 
-__all__ = ("CachedCommands", "clear_cache", "read_commands", "write_commands")
+__all__ = ("CachedCommandRow", "CachedCommands", "clear_cache", "read_commands", "write_commands")

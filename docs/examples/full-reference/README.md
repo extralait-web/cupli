@@ -27,8 +27,13 @@ the `examples/` directory contains a complete catalogue.
 | `tags: [...]` for `--tag` filtering | every app |
 | `mounts:` with `hosted_in`, `exec_path`, `mode`, `mac_volume` | `sdk` |
 | `hooks:` per-target overrides | bottom |
-| `commands:` shortcuts with `top_level:` | bottom |
+| `commands:` shortcuts with `top_level:` | `lint`, `test`, … |
+| Command `group:` (help panel) + multi-line `run:` | `db-reset` |
+| Command typed `args:` (positional, `--option`, bool flag, `int`) | `db-migrate` |
+| Command `args:` shorthand (bare list of names) | `tail-log` |
+| Multi-container command with `execute:` (sequential/continue/parallel) | `pip-freeze` |
 | Top-level `networks:` block | between `mounts:` and `hooks:` |
+| Top-level `volumes:` / `secrets:` / `configs:` blocks | after `networks:` (`minio_data`, `ci_token`, `app_config`) |
 | `${VAR}` interpolation, `${VAR:-default}` defaults | throughout |
 | Per-component path-vars (`<NAME>_APP_PATH`, …) | `${API_APP_PATH}` inside `api.services.api.build.context` |
 

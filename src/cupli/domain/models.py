@@ -12,6 +12,7 @@ job in the next milestone. The schema only validates structural correctness.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
@@ -28,7 +29,10 @@ from cupli.domain.consts import (
     TAG_PATTERN,
     VERSION_PATTERN,
 )
-from cupli.domain.enums import DepMode, MacVolumeMode, MountMode, ServiceMode
+from cupli.domain.enums import DepMode, ExecuteMode, MacVolumeMode, MountMode, ServiceMode
+
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z][\w-]*)\s*\}\}")
+"""Matches ``{{name}}`` argument placeholders inside a command's ``run`` line."""
 
 
 def _coerce_scalar_to_str(value: object) -> object:
@@ -79,6 +83,34 @@ def _services_list_to_dict(value: object) -> object:
     if isinstance(value, list):
         return {item: {} for item in value}
     return value
+
+
+def _join_run_lines(value: object) -> object:
+    """Accept a command ``run`` as a string or a list of lines.
+
+    A list is joined with newlines so multi-line scripts can be declared either
+    as a YAML block scalar or as an explicit list of commands.
+    """
+    if isinstance(value, list):
+        return "\n".join(str(line) for line in value)
+    return value
+
+
+def _args_shorthand_to_dicts(value: object) -> object:
+    """Accept ``args`` as bare names or full arg-spec mappings.
+
+    A bare string entry ``path`` expands to a required positional string
+    argument ``{name: path, required: true}``; mappings pass through untouched.
+    """
+    if not isinstance(value, list):
+        return value
+    expanded: list[object] = []
+    for item in value:
+        if isinstance(item, str):
+            expanded.append({"name": item, "required": True})
+            continue
+        expanded.append(item)
+    return expanded
 
 
 def _coerce_null_block_values(value: object) -> object:
@@ -209,6 +241,59 @@ class ServiceOverride(BaseModel):
         return dumped
 
 
+class CommandArg(_Frozen):
+    """One declared parameter of a ``commands[<name>]`` shortcut.
+
+    Attributes:
+        name: identifier; used both as the ``{{name}}`` placeholder inside the
+            command's ``run`` line and as the CLI argument/option name.
+        help: short description shown in ``cupli <command> --help``.
+        type: value type — ``str`` (default), ``int``, or ``bool``.
+        option: when True the parameter is a ``--name`` option; otherwise a
+            positional argument. A ``bool`` type is always an option (flag).
+        short: optional single-letter alias for an option (``l`` renders ``-l``).
+        required: whether the parameter must be supplied. Mutually exclusive
+            with ``default``.
+        default: value substituted when the parameter is omitted.
+    """
+
+    name: NameStr
+    help: str | None = None
+    type: Literal["str", "int", "bool"] = "str"
+    option: bool = False
+    short: str | None = None
+    required: bool = False
+    default: ScalarStr | None = None
+
+    @property
+    def is_option(self) -> bool:
+        """Return True when the parameter renders as a ``--name`` option.
+
+        Explicit ``option: true`` or a ``bool`` type (always a flag) both make
+        the parameter an option rather than a positional argument.
+        """
+        return self.option or self.type == "bool"
+
+    @property
+    def is_positional(self) -> bool:
+        """Return True for a positional argument."""
+        return self.is_option is False
+
+    @model_validator(mode="after")
+    def _validate_arg(self) -> Self:
+        """Reject contradictory or unrepresentable argument declarations."""
+        if not self.name.isidentifier():
+            raise ValueError(
+                f"command arg name '{self.name}' must be a valid identifier "
+                "(letters, digits, underscore; no '-') so it maps to a CLI parameter",
+            )
+        if self.required and self.default is not None:
+            raise ValueError(f"command arg '{self.name}' sets both `required` and `default` — choose one")
+        if self.short is not None and self.is_option is False:
+            raise ValueError(f"command arg '{self.name}' sets `short` but is positional; `short` applies to options")
+        return self
+
+
 class CommandShortcut(_Frozen):
     """One ``commands[<name>]`` entry.
 
@@ -217,19 +302,41 @@ class CommandShortcut(_Frozen):
     verb (collisions with builtin commands are ignored).
 
     Attributes:
-        container: app name whose service runs the command.
-        run: shell command line executed inside the container.
+        container: one or more app names whose service runs the command. A bare
+            string is wrapped into a one-element list.
+        run: shell command line executed inside the container. Accepts a single
+            string (block scalars allowed) or a list of lines joined with
+            newlines. ``{{name}}`` placeholders are substituted from declared
+            ``args``.
         workdir: working directory inside the container.
         help: short help string shown in ``cupli --help``.
         top_level: when True, the command is promoted to a top-level verb
             so ``cupli <name>`` works alongside ``cupli sc <name>``.
+        group: optional label; top-level commands are grouped under it in
+            ``cupli --help`` and the ``cupli sc`` listing.
+        execute: strategy when ``container`` lists several apps — sequential
+            (fail-fast, default), continue, or parallel.
+        args: declared parameters surfaced as typed CLI arguments/options and
+            substituted into ``run`` via ``{{name}}`` placeholders. A bare list
+            of names is shorthand for required positional string arguments.
     """
 
-    container: NameStr
-    run: str
+    container: NameList = Field(min_length=1)
+    run: Annotated[str, BeforeValidator(_join_run_lines)]
     workdir: str | None = None
     help: str | None = None
     top_level: bool = False
+    group: str | None = None
+    execute: ExecuteMode = ExecuteMode.SEQUENTIAL
+    args: Annotated[list[CommandArg], BeforeValidator(_args_shorthand_to_dicts)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_args(self) -> Self:
+        """Validate argument uniqueness, positional order, and run placeholders."""
+        _check_unique_arg_names(self.args)
+        _check_positional_order(self.args)
+        _check_run_placeholders(self.run, self.args)
+        return self
 
 
 class _Component(_Frozen):
@@ -474,10 +581,46 @@ def _check_command_containers(
     """Raise when a workspace command refers to an undeclared container app."""
     known = set(apps)
     for cmd_name, cmd in commands.items():
-        if cmd.container in known:
+        unknown = [name for name in cmd.container if name not in known]
+        if not unknown:
             continue
         raise ValueError(
-            f"commands.{cmd_name}.container '{cmd.container}' is not a declared app. Declared apps: {sorted(known)!r}",
+            f"commands.{cmd_name}.container references unknown app(s): {unknown!r}. Declared apps: {sorted(known)!r}",
+        )
+
+
+def _check_unique_arg_names(args: list[CommandArg]) -> None:
+    """Reject duplicate argument names within one command."""
+    seen: set[str] = set()
+    for arg in args:
+        if arg.name in seen:
+            raise ValueError(f"duplicate command arg name '{arg.name}'")
+        seen.add(arg.name)
+
+
+def _check_positional_order(args: list[CommandArg]) -> None:
+    """Required positional arguments must precede optional ones (click rule)."""
+    seen_optional = False
+    for arg in args:
+        if arg.is_option:
+            continue
+        if arg.required and seen_optional:
+            raise ValueError(
+                f"command arg '{arg.name}': required positional arguments must precede optional ones",
+            )
+        seen_optional = seen_optional or arg.required is False
+
+
+def _check_run_placeholders(run: str, args: list[CommandArg]) -> None:
+    """Every ``{{name}}`` placeholder in ``run`` must reference a declared arg."""
+    if not args:
+        return
+    declared = {arg.name for arg in args}
+    used = set(_PLACEHOLDER_RE.findall(run))
+    unknown = sorted(used - declared)
+    if unknown:
+        raise ValueError(
+            f"run references undeclared argument placeholder(s): {unknown!r}. Declared args: {sorted(declared)!r}",
         )
 
 
@@ -499,6 +642,7 @@ def iter_all_components(
 __all__ = (
     "AppModel",
     "BaseAppModel",
+    "CommandArg",
     "CommandShortcut",
     "HooksOverride",
     "MountModel",

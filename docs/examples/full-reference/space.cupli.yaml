@@ -334,9 +334,18 @@ hooks:
 #  WORKSPACE COMMANDS — `cupli sc <name>` (or `cupli <name>` when promoted).
 # =====================================================================
 #
-# A command is a shortcut for "exec this fixed argv inside this
-# service". `top_level: true` ALSO registers it as a first-class verb
+# A command is a shortcut for "exec this command inside one or more
+# services". `top_level: true` ALSO registers it as a first-class verb
 # alongside `cupli up`, `cupli logs`, etc.
+#
+# Capabilities (see examples below):
+#   group     — label that becomes a help panel in `cupli --help`.
+#   run       — a line, a multi-line block scalar, or a list of lines.
+#   args      — typed parameters surfaced in `cupli <cmd> --help` and
+#               substituted into `run` via `{{name}}` placeholders.
+#   container — one app, or a list of apps to run the command in.
+#   execute   — for several containers: sequential (default, fail-fast),
+#               continue, or parallel.
 # =====================================================================
 commands:
 
@@ -363,4 +372,50 @@ commands:
     container: postgres
     run: psql -U postgres
     help: Open a psql shell against the postgres service.
+    top_level: false
+
+  # --- grouping + multi-line run ---
+  db-reset:
+    group: Database                                # collected under a "Database" panel in `cupli --help`
+    container: postgres
+    run: |                                         # one command per line; use `&&` or `set -e` for fail-fast
+      psql -U postgres -c 'DROP DATABASE IF EXISTS app'
+      psql -U postgres -c 'CREATE DATABASE app'
+    help: Drop and recreate the app database.
+    top_level: true
+
+  # --- declared, typed arguments substituted into run via {{name}} ---
+  db-migrate:
+    group: Database
+    container: api
+    args:
+      - name: app                                  # required positional: `cupli db-migrate users`
+        help: Django app label to migrate.
+        required: true
+      - name: fake                                 # bool -> a `--fake` flag
+        type: bool
+        help: Record migrations without running them.
+      - name: verbosity                            # `--verbosity` / `-v`, typed int with a default
+        option: true
+        short: v
+        type: int
+        default: 1
+        help: Output verbosity level.
+    run: python manage.py migrate {{app}} {{fake}} --verbosity {{verbosity}}
+    help: Run Django migrations for one app.
+    top_level: true
+
+  # --- args shorthand: a bare list == required positional string args ---
+  tail-log:
+    container: api
+    args: [path]                                   # equivalent to one required positional `path`
+    run: tail -f {{path}}
+    help: Tail a log file inside the api container.
+
+  # --- run across several containers ---
+  pip-freeze:
+    container: [api, migrate]                      # runs in each listed app's service
+    execute: parallel                              # sequential (default, fail-fast) | continue | parallel
+    run: pip freeze
+    help: List installed packages in api and migrate.
     top_level: false

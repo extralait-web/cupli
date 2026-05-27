@@ -48,13 +48,18 @@ space.cupli.yaml
 │      • services: [a,b]→  same, list-form shorthand for empty overrides
 ├─ mounts:            toggleable bind-mounts (cupli mounts attach/detach)
 ├─ networks:          docker-compose `networks:` block (compose-spec verbatim)
-└─ commands:          shortcuts (cupli sc <name> / cupli <name>)
+├─ volumes:           top-level `volumes:` block (named volumes, verbatim)
+├─ secrets:           top-level `secrets:` block (secret definitions, verbatim)
+├─ configs:           top-level `configs:` block (config definitions, verbatim)
+└─ commands:          shortcuts (cupli sc <name> / cupli <name>); support
+                      groups, typed args, multi-line run, multi-container
 ```
 
 Cupli writes three generated files under `.locals/<space>/state/` on
 every invocation:
 
-* `docker-compose.pre.yml` — defaults (network, `container_name`).
+* `docker-compose.pre.yml` — defaults (network, `container_name`) plus any
+  top-level `volumes:` / `secrets:` / `configs:` blocks (verbatim).
 * `docker-compose.inline.yml` — services declared inline.
 * `docker-compose.post.yml` — `environment` / `ports` / `volumes` /
   `depends_on` / `networks` injection.
@@ -273,6 +278,80 @@ commands:
     run: ruff check src tests
     help: Lint the backend.
     top_level: true              # `cupli lint` works alongside `cupli sc lint`
+```
+
+### "Add a command with arguments / grouping / multiple containers"
+
+`commands:` entries support more than a fixed `run`. Use these when a
+shortcut needs parameters, a help panel, several steps, or several
+containers:
+
+```yaml
+commands:
+  db-migrate:
+    group: Database              # groups the command under a "Database" help panel
+    container: backend           # one app, or a list: [backend, worker]
+    args:                        # typed params shown in `cupli db-migrate --help`
+      - name: app                #   required positional: `cupli db-migrate users`
+        help: App label to migrate.
+        required: true
+      - name: fake               #   bool -> a `--fake` flag (bool is always an option)
+        type: bool
+        help: Record without applying.
+      - name: verbosity          #   `--verbosity` / `-v`, typed int with a default
+        option: true
+        short: v
+        type: int
+        default: 1
+    run: python manage.py migrate {{app}} {{fake}} --verbosity {{verbosity}}
+    top_level: true
+
+  pip-check:
+    container: [backend, worker] # runs in each listed app's service
+    execute: parallel            # sequential (default, fail-fast) | continue | parallel
+    run: pip list --outdated
+```
+
+Rules for `commands:`:
+
+* **`container`** — one app name or a list. A list runs the command in every
+  listed app's primary service; **`execute`** picks the strategy:
+  `sequential` (default, stops at the first failure), `continue` (run all,
+  non-zero exit if any failed), or `parallel` (concurrent, output captured
+  per container).
+* **`run`** — a single line, a YAML block scalar, or a list of lines (joined
+  with newlines). It runs via `sh -c`, so `&&`, `|`, `$VAR` work. A multi-line
+  script is **not** fail-fast by default — chain with `&&` or start with
+  `set -e` if you need that.
+* **`args`** — declared, typed parameters. Each has `name`, optional `help`,
+  `type` (`str`/`int`/`bool`), `option` (positional vs `--flag`), `short`
+  (option alias), `required`, `default` (mutually exclusive with `required`).
+  A `bool` is always a flag. Reference each in `run` via `{{name}}`; values are
+  shell-quoted automatically. A bare list — `args: [path, name]` — is shorthand
+  for required positional string args. Arg names must be valid identifiers
+  (letters, digits, `_`; no `-`).
+* **`group`** — label that becomes a help panel for top-level commands and
+  groups the `cupli sc` listing.
+* When `args` are declared, trailing tokens are parsed against them (no `$@`
+  passthrough). Without `args`, a single-line `run` still gets `"$@"` appended
+  so `cupli sc test -k foo` forwards extra tokens.
+
+### "Declare a named volume / build secret for an inline service"
+
+Top-level `volumes:` / `secrets:` / `configs:` are merged verbatim into the
+generated pre-override, so an inline service can reference them without a
+separate compose file:
+
+```yaml
+volumes:
+  minio_data:                    # null body == default-driver named volume
+
+apps:
+  minio:
+    service:
+      image: minio/minio
+      command: server /data
+      volumes: [ minio_data:/data ]   # references the named volume above
 ```
 
 ---

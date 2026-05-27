@@ -331,20 +331,115 @@
       "title": "BaseAppModel",
       "type": "object"
     },
-    "CommandShortcut": {
+    "CommandArg": {
       "additionalProperties": false,
-      "description": "One ``commands[<name>]`` entry.\n\nBy default reachable only via ``cupli sc <name>``. Set\n``top_level: true`` to ALSO register it as a first-class ``cupli <name>``\nverb (collisions with builtin commands are ignored).\n\nAttributes:\n    container: app name whose service runs the command.\n    run: shell command line executed inside the container.\n    workdir: working directory inside the container.\n    help: short help string shown in ``cupli --help``.\n    top_level: when True, the command is promoted to a top-level verb\n        so ``cupli <name>`` works alongside ``cupli sc <name>``.",
+      "description": "One declared parameter of a ``commands[<name>]`` shortcut.\n\nAttributes:\n    name: identifier; used both as the ``{{name}}`` placeholder inside the\n        command's ``run`` line and as the CLI argument/option name.\n    help: short description shown in ``cupli <command> --help``.\n    type: value type — ``str`` (default), ``int``, or ``bool``.\n    option: when True the parameter is a ``--name`` option; otherwise a\n        positional argument. A ``bool`` type is always an option (flag).\n    short: optional single-letter alias for an option (``l`` renders ``-l``).\n    required: whether the parameter must be supplied. Mutually exclusive\n        with ``default``.\n    default: value substituted when the parameter is omitted.",
       "properties": {
-        "container": {
+        "name": {
           "maxLength": 64,
           "minLength": 1,
           "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
-          "title": "Container",
+          "title": "Name",
           "type": "string"
+        },
+        "help": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Help"
+        },
+        "type": {
+          "default": "str",
+          "enum": [
+            "str",
+            "int",
+            "bool"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "option": {
+          "default": false,
+          "title": "Option",
+          "type": "boolean"
+        },
+        "short": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Short"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "CommandArg",
+      "type": "object"
+    },
+    "CommandShortcut": {
+      "additionalProperties": false,
+      "description": "One ``commands[<name>]`` entry.\n\nBy default reachable only via ``cupli sc <name>``. Set\n``top_level: true`` to ALSO register it as a first-class ``cupli <name>``\nverb (collisions with builtin commands are ignored).\n\nAttributes:\n    container: one or more app names whose service runs the command. A bare\n        string is wrapped into a one-element list.\n    run: shell command line executed inside the container. Accepts a single\n        string (block scalars allowed) or a list of lines joined with\n        newlines. ``{{name}}`` placeholders are substituted from declared\n        ``args``.\n    workdir: working directory inside the container.\n    help: short help string shown in ``cupli --help``.\n    top_level: when True, the command is promoted to a top-level verb\n        so ``cupli <name>`` works alongside ``cupli sc <name>``.\n    group: optional label; top-level commands are grouped under it in\n        ``cupli --help`` and the ``cupli sc`` listing.\n    execute: strategy when ``container`` lists several apps — sequential\n        (fail-fast, default), continue, or parallel.\n    args: declared parameters surfaced as typed CLI arguments/options and\n        substituted into ``run`` via ``{{name}}`` placeholders. A bare list\n        of names is shorthand for required positional string arguments.",
+      "properties": {
+        "container": {
+          "title": "Container",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ]
         },
         "run": {
           "title": "Run",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "workdir": {
           "anyOf": [
@@ -374,6 +469,39 @@
           "default": false,
           "title": "Top Level",
           "type": "boolean"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group"
+        },
+        "execute": {
+          "$ref": "#/$defs/ExecuteMode",
+          "default": "sequential"
+        },
+        "args": {
+          "title": "Args",
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/CommandArg"
+              },
+              "type": "array"
+            }
+          ]
         }
       },
       "required": [
@@ -391,6 +519,16 @@
         "full"
       ],
       "title": "DepMode",
+      "type": "string"
+    },
+    "ExecuteMode": {
+      "description": "Execution strategy for a multi-container ``commands[*]`` shortcut.\n\n``SEQUENTIAL`` runs containers one by one and stops at the first failure\n(fail-fast). ``CONTINUE`` runs every container regardless of failures and\nreports an aggregate result. ``PARALLEL`` runs them concurrently, capturing\neach container's output to avoid interleaving.",
+      "enum": [
+        "sequential",
+        "continue",
+        "parallel"
+      ],
+      "title": "ExecuteMode",
       "type": "string"
     },
     "HooksOverride": {

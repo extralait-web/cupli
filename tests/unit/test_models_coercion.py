@@ -100,3 +100,55 @@ def test_top_level_block_non_dict_value_rejected() -> None:
         SpaceModel.model_validate(
             {"name": "demo", "apps": {"api": {}}, "volumes": {"minio_data": ["x"]}},
         )
+
+
+def _command(cmd: dict) -> dict:
+    return {"name": "demo", "apps": {"api": {}, "worker": {}}, "commands": {"c": cmd}}
+
+
+def test_command_container_accepts_single_string() -> None:
+    """``container: api`` is wrapped into a one-element list."""
+    space = SpaceModel.model_validate(_command({"container": "api", "run": "x"}))
+    assert space.commands["c"].container == ["api"]
+
+
+def test_command_run_accepts_list_of_lines() -> None:
+    """A ``run`` list is joined with newlines into a single script."""
+    space = SpaceModel.model_validate(_command({"container": "api", "run": ["echo a", "echo b"]}))
+    assert space.commands["c"].run == "echo a\necho b"
+
+
+def test_command_args_shorthand_expands_to_required_positionals() -> None:
+    """A bare list of names becomes required positional string args."""
+    space = SpaceModel.model_validate(_command({"container": "api", "run": "x {{path}}", "args": ["path"]}))
+    arg = space.commands["c"].args[0]
+    assert arg.name == "path"
+    assert arg.required is True
+    assert arg.is_positional is True
+
+
+def test_command_bool_arg_is_option() -> None:
+    """A ``bool`` arg is treated as an option even without ``option: true``."""
+    space = SpaceModel.model_validate(
+        _command({"container": "api", "run": "x {{fake}}", "args": [{"name": "fake", "type": "bool"}]}),
+    )
+    assert space.commands["c"].args[0].is_option is True
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        {"container": "api", "run": "x", "args": [{"name": "a", "required": True, "default": "z"}]},
+        {"container": "api", "run": "x", "args": [{"name": "a", "short": "a"}]},
+        {"container": "api", "run": "x {{b}}", "args": [{"name": "a"}]},
+        {"container": "api", "run": "x", "args": [{"name": "a"}, {"name": "a"}]},
+        {"container": "api", "run": "x", "args": [{"name": "a"}, {"name": "b", "required": True}]},
+        {"container": "ghost", "run": "x"},
+        {"container": [], "run": "x"},
+        {"container": "api", "run": "x", "args": [{"name": "a-b"}]},
+    ],
+)
+def test_command_invalid_declarations_rejected(cmd: dict) -> None:
+    """Contradictory arg declarations and unknown containers are rejected."""
+    with pytest.raises(ValidationError):
+        SpaceModel.model_validate(_command(cmd))

@@ -10,8 +10,9 @@ service's env vars but cannot run inside docker.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
+import click
 import typer
 
 from cupli.cli._completion import (
@@ -19,12 +20,22 @@ from cupli.cli._completion import (
     complete_service_names,
     complete_shortcut_names,
 )
+from cupli.cli._shortcuts import parse_extra, render_run, specs_from_models
 from cupli.cli.workspace import _resolve_space_path, _strict_vars
 from cupli.core.loader import load_space
+from cupli.domain.consts import COMMANDS_PANEL_TITLE
+from cupli.domain.enums import ExecuteMode
 from cupli.domain.errors import CupliError
 from cupli.services.compose_service import invoke, make_plan
 from cupli.utils.exceptions import suppress_known_exceptions
 from cupli.utils.subprocess import run_command
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
+
+    from cupli.core.loader import ResolvedSpace
+    from cupli.domain.models import CommandArg, CommandShortcut
+    from cupli.services.compose_service import CompiledPlan
 
 
 @suppress_known_exceptions
@@ -159,7 +170,7 @@ def shortcut_command(
     ] = None,
     extra: Annotated[
         list[str] | None,
-        typer.Argument(help="Extra args appended after the declared command."),
+        typer.Argument(help="Args for the command (declared args, or appended after it)."),
     ] = None,
 ) -> None:
     """Run a workspace command from ``commands:`` (omit name to list)."""
@@ -170,48 +181,242 @@ def shortcut_command(
         _list_shortcuts(resolved)
         return
 
-    if name not in resolved.space.commands:
-        from cupli.utils.fuzzy import suggest
+    shortcut = _lookup_shortcut(resolved, name)
+    _, plan = _build_plan(ctx)
+    code = _execute_shortcut(plan, name, shortcut, extra or [])
+    raise typer.Exit(code=code)
 
-        suggestions = suggest(name, list(resolved.space.commands))
-        title = f"unknown workspace command '{name}'"
-        if suggestions:
-            title += f"; did you mean: {', '.join(suggestions)}"
-        raise CupliError("E020", name=title)
+
+def run_shortcut_resolved(ctx: typer.Context, name: str, values: dict[str, object]) -> None:
+    """Run a promoted top-level shortcut with already-parsed argument values.
+
+    Called by the dynamically registered ``cupli <name>`` command, whose typed
+    parameters click has already parsed into ``values``.
+    """
+    space_path = _resolve_space_path(ctx)
+    resolved = load_space(space_path, strict_vars=_strict_vars(ctx))
     shortcut = resolved.space.commands[name]
     _, plan = _build_plan(ctx)
+    run = render_run(shortcut.run, specs_from_models(shortcut.args), values)
+    code = _run_across_containers(plan, list(shortcut.container), shortcut.workdir, run, shortcut.execute, None)
+    raise typer.Exit(code=code)
+
+
+def _lookup_shortcut(resolved: ResolvedSpace, name: str) -> CommandShortcut:
+    """Return the named shortcut or raise ``E020`` with fuzzy suggestions."""
+    if name in resolved.space.commands:
+        return resolved.space.commands[name]
+    from cupli.utils.fuzzy import suggest
+
+    suggestions = suggest(name, list(resolved.space.commands))
+    title = f"unknown workspace command '{name}'"
+    if suggestions:
+        title += f"; did you mean: {', '.join(suggestions)}"
+    raise CupliError("E020", name=title)
+
+
+def _execute_shortcut(plan: CompiledPlan, name: str, shortcut: CommandShortcut, extra: list[str]) -> int:
+    """Render and run a shortcut, returning the aggregate exit code.
+
+    With declared ``args`` the trailing tokens are parsed and substituted into
+    ``run``; without them the tokens are appended as positional ``$@`` for
+    backward compatibility.
+    """
+    containers = list(shortcut.container)
+    if not shortcut.args:
+        return _run_across_containers(plan, containers, shortcut.workdir, shortcut.run, shortcut.execute, extra or None)
+    run = _render_with_args(name, shortcut, extra)
+    return _run_across_containers(plan, containers, shortcut.workdir, run, shortcut.execute, None)
+
+
+def _render_with_args(name: str, shortcut: CommandShortcut, extra: list[str]) -> str:
+    """Parse ``extra`` against declared args and render the ``run`` line."""
+    specs = specs_from_models(shortcut.args)
+    try:
+        values = parse_extra(specs, extra)
+    except click.UsageError as exc:
+        raise CupliError("E020", name=f"command '{name}': {exc.format_message()}") from exc
+    return render_run(shortcut.run, specs, values)
+
+
+# --- multi-container execution ---------------------------------------------
+
+
+def _run_across_containers(
+    plan: CompiledPlan,
+    containers: list[str],
+    workdir: str | None,
+    run: str,
+    mode: ExecuteMode,
+    passthrough: list[str] | None,
+) -> int:
+    """Run ``run`` across every container per the execution ``mode``."""
+    if mode is ExecuteMode.PARALLEL:
+        return _run_parallel(plan, containers, workdir, run, passthrough)
+    return _run_sequential(plan, containers, workdir, run, mode, passthrough)
+
+
+def _run_sequential(
+    plan: CompiledPlan,
+    containers: list[str],
+    workdir: str | None,
+    run: str,
+    mode: ExecuteMode,
+    passthrough: list[str] | None,
+) -> int:
+    """Run containers one by one; fail-fast for SEQUENTIAL, run-all for CONTINUE."""
+    aggregate = 0
+    for container in containers:
+        completed = invoke(plan, _build_exec_args(container, workdir, run, passthrough), check=False)
+        if completed.returncode == 0:
+            continue
+        if mode is ExecuteMode.SEQUENTIAL:
+            return completed.returncode
+        aggregate = aggregate or completed.returncode
+    return aggregate
+
+
+def _run_parallel(
+    plan: CompiledPlan,
+    containers: list[str],
+    workdir: str | None,
+    run: str,
+    passthrough: list[str] | None,
+) -> int:
+    """Run every container concurrently, capturing output to avoid interleaving."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results: dict[str, CompletedProcess[str]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(containers))) as pool:
+        futures = {pool.submit(_invoke_capture, plan, c, workdir, run, passthrough): c for c in containers}
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+    return _report_parallel(containers, results)
+
+
+def _invoke_capture(
+    plan: CompiledPlan,
+    container: str,
+    workdir: str | None,
+    run: str,
+    passthrough: list[str] | None,
+) -> CompletedProcess[str]:
+    """Run one container's command with output captured (no streaming)."""
+    return invoke(plan, _build_exec_args(container, workdir, run, passthrough), stream=False, check=False)
+
+
+def _report_parallel(containers: list[str], results: dict[str, CompletedProcess[str]]) -> int:
+    """Print each container's captured output under a header; aggregate exit code."""
+    from cupli.utils.console import console
+
+    aggregate = 0
+    for container in containers:
+        completed = results[container]
+        console.rule(f"{container} (exit {completed.returncode})")
+        _echo_capture(completed)
+        aggregate = aggregate or completed.returncode
+    return aggregate
+
+
+def _echo_capture(completed: CompletedProcess[str]) -> None:
+    """Write a captured process's stdout/stderr verbatim."""
+    if completed.stdout:
+        typer.echo(completed.stdout, nl=False)
+    if completed.stderr:
+        typer.echo(completed.stderr, nl=False)
+
+
+def _build_exec_args(container: str, workdir: str | None, run: str, passthrough: list[str] | None) -> list[str]:
+    """Build the ``docker compose exec`` argv for one container.
+
+    ``run`` is wrapped in ``sh -c`` so operators (``&&``, ``|``, ``$VAR``)
+    expand inside the container. When ``passthrough`` is given (no declared
+    args), the tokens become positional parameters for the snippet.
+    """
     args = ["exec"]
-    if shortcut.workdir:
-        args.extend(["--workdir", shortcut.workdir])
-    args.append(shortcut.container)
-    # ``run`` is a shell command line — wrap in ``sh -c`` so operators like
-    # ``&&``, ``|``, redirects and ``$VAR`` expand inside the container. Extra
-    # args become positional parameters for the shell snippet.
-    if extra:
-        args.extend(["sh", "-c", f'{shortcut.run} "$@"', "_", *extra])
-    else:
-        args.extend(["sh", "-c", shortcut.run])
-    invoke(plan, args)
+    if workdir:
+        args.extend(["--workdir", workdir])
+    args.append(container)
+    if not passthrough:
+        args.extend(["sh", "-c", run])
+        return args
+    # Auto-append ``"$@"`` only for a single-line snippet; a multi-line script
+    # still receives the tokens as positional parameters ($1, $2, …) but is not
+    # mangled by appending to its last line.
+    script = f'{run} "$@"' if "\n" not in run else run
+    args.extend(["sh", "-c", script, "_", *passthrough])
+    return args
 
 
-def _list_shortcuts(resolved) -> None:
-    """Print declared ``commands:`` as a rich table."""
-    from rich.table import Table
+# --- listing ---------------------------------------------------------------
 
+
+def _list_shortcuts(resolved: ResolvedSpace) -> None:
+    """Print declared ``commands:`` as one rich table per group."""
     from cupli.utils.console import console, info
 
-    if not resolved.space.commands:
+    commands = resolved.space.commands
+    if not commands:
         info("no workspace commands declared; add a `commands:` block to your space yaml.")
         return
-    table = Table(title="Workspace commands", show_lines=False, expand=False)
-    table.add_column("name", style="cyan", no_wrap=True)
-    table.add_column("container", style="white", no_wrap=True)
-    table.add_column("command", style="white")
-    table.add_column("help", style="dim")
-    for shortcut_name in sorted(resolved.space.commands):
-        shortcut = resolved.space.commands[shortcut_name]
-        table.add_row(shortcut_name, shortcut.container, shortcut.run, shortcut.help or "")
-    console.print(table)
+    for group_name, names in _group_command_names(commands).items():
+        console.print(_shortcut_table(group_name, commands, names))
+
+
+def _group_command_names(commands: dict[str, CommandShortcut]) -> dict[str, list[str]]:
+    """Map each group label to its sorted command names (ungrouped last)."""
+    groups: dict[str, list[str]] = {}
+    for name in sorted(commands):
+        label = commands[name].group or COMMANDS_PANEL_TITLE
+        groups.setdefault(label, []).append(name)
+    return groups
+
+
+def _shortcut_table(group_name: str, commands: dict[str, CommandShortcut], names: list[str]):
+    """Build a rich table for one group of shortcuts."""
+    from rich.table import Table
+
+    table = Table(title=group_name, show_lines=False, expand=False)
+    for column, style in (
+        ("name", "cyan"),
+        ("containers", "white"),
+        ("command", "white"),
+        ("args", "dim"),
+        ("help", "dim"),
+    ):
+        table.add_column(column, style=style, no_wrap=column in {"name", "containers"})
+    for name in names:
+        shortcut = commands[name]
+        table.add_row(
+            name,
+            ", ".join(shortcut.container),
+            _first_line(shortcut.run),
+            _args_summary(shortcut.args),
+            shortcut.help or "",
+        )
+    return table
+
+
+def _first_line(run: str) -> str:
+    """Return the first line of ``run`` with an ellipsis when it spans more."""
+    lines = run.splitlines()
+    if len(lines) <= 1:
+        return run
+    return f"{lines[0]} …"
+
+
+def _args_summary(args: list[CommandArg]) -> str:
+    """Render a compact label for declared args (``<req> [opt] --flag``)."""
+    return " ".join(_arg_label(arg) for arg in args)
+
+
+def _arg_label(arg: CommandArg) -> str:
+    """Return the compact display label for one declared arg."""
+    if arg.is_option:
+        return f"--{arg.name}"
+    if arg.required:
+        return f"<{arg.name}>"
+    return f"[{arg.name}]"
 
 
 @suppress_known_exceptions
@@ -356,6 +561,7 @@ __all__ = (
     "env_command",
     "exec_command",
     "run_cli_command",
+    "run_shortcut_resolved",
     "shell_command",
     "shortcut_command",
     "upgrade_config_command",
