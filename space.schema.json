@@ -1123,6 +1123,48 @@
       },
       "title": "Networks",
       "type": "object"
+    },
+    "volumes": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Volumes",
+      "type": "object"
+    },
+    "secrets": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Secrets",
+      "type": "object"
+    },
+    "configs": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Configs",
+      "type": "object"
     }
   },
   "required": [

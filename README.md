@@ -219,6 +219,9 @@ schema with one-line descriptions.
 | `hooks` | map[str, hook-override] | `{}` | Per-target tweaks for `cupli hooks install`. |
 | `commands` | map[str, command-shortcut] | `{}` | `cupli sc <name>` / `cupli <name>` (with `top_level: true`). |
 | `networks` | map[str, dict] | `{}` | Top-level docker-compose `networks:` block. Values are compose-spec verbatim (`driver`, `name`, `ipam`, etc.). Cupli's `default` network is merged in automatically. |
+| `volumes` | map[str, dict] | `{}` | Top-level docker-compose `volumes:` block. Named volumes (compose-spec verbatim) so inline services can reference them without a separate compose file. A null body (`minio_data:`) is a default-driver volume. |
+| `secrets` | map[str, dict] | `{}` | Top-level docker-compose `secrets:` block. Secret definitions (compose-spec verbatim) referenced by service-level `secrets:`. |
+| `configs` | map[str, dict] | `{}` | Top-level docker-compose `configs:` block. Config definitions (compose-spec verbatim) referenced by service-level `configs:`. |
 
 ### `bases.<name>`
 
@@ -589,6 +592,29 @@ apps:
     service:
       image: ...
       networks: [monitoring]
+```
+
+### Named volumes, secrets, configs
+
+Top-level `volumes:` / `secrets:` / `configs:` are merged verbatim into
+`docker-compose.pre.yml`, so an inline service can reference them without a
+separate compose file. No synthetic `default` is injected (unlike `networks`),
+and an empty block is omitted from the output.
+
+```yaml
+volumes:
+  minio_data:            # null body == default-driver named volume
+
+secrets:
+  ci_token:
+    environment: CI_JOB_TOKEN
+
+apps:
+  minio:
+    service:
+      image: minio/minio
+      command: server /data
+      volumes: [minio_data:/data]   # references the named volume above
 ```
 
 ---

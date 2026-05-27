@@ -65,6 +65,71 @@ def test_pre_override_declares_network(tmp_path: Path) -> None:
     assert data["networks"]["default"]["name"] == "demo"
 
 
+def test_pre_override_renders_top_level_volumes(tmp_path: Path) -> None:
+    """A top-level ``volumes:`` block is copied verbatim into the pre-override."""
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        "name: demo\napps:\n  api: {}\nvolumes:\n  minio_data:\n    driver: local\n",
+    )
+    resolved = load_space(space_file)
+    pre_path, _, _ = render_overrides(resolved)
+    data = yaml.safe_load(pre_path.read_text())
+    assert data["volumes"]["minio_data"] == {"driver": "local"}
+
+
+def test_pre_override_renders_top_level_secrets_and_configs(tmp_path: Path) -> None:
+    """Top-level ``secrets:`` and ``configs:`` blocks pass through verbatim."""
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        "name: demo\napps:\n  api: {}\n"
+        "secrets:\n  ci_token:\n    environment: CI_JOB_TOKEN\n"
+        "configs:\n  app_cfg:\n    file: ./cfg.yml\n",
+    )
+    resolved = load_space(space_file)
+    pre_path, _, _ = render_overrides(resolved)
+    data = yaml.safe_load(pre_path.read_text())
+    assert data["secrets"]["ci_token"] == {"environment": "CI_JOB_TOKEN"}
+    assert data["configs"]["app_cfg"] == {"file": "./cfg.yml"}
+
+
+def test_pre_override_named_volume_with_null_body(tmp_path: Path) -> None:
+    """``minio_data:`` with no body renders as an empty mapping (default driver)."""
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        "name: demo\napps:\n  api: {}\nvolumes:\n  minio_data:\n",
+    )
+    resolved = load_space(space_file)
+    pre_path, _, _ = render_overrides(resolved)
+    data = yaml.safe_load(pre_path.read_text())
+    assert data["volumes"] == {"minio_data": {}}
+
+
+def test_pre_override_omits_empty_top_level_blocks(tmp_path: Path) -> None:
+    """No ``volumes`` / ``secrets`` / ``configs`` keys appear when none are declared."""
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        "name: demo\napps:\n  api: {}\n",
+    )
+    resolved = load_space(space_file)
+    pre_path, _, _ = render_overrides(resolved)
+    data = yaml.safe_load(pre_path.read_text())
+    assert "volumes" not in data
+    assert "secrets" not in data
+    assert "configs" not in data
+
+
+def test_pre_override_top_level_blocks_have_no_default(tmp_path: Path) -> None:
+    """Unlike ``networks``, the new blocks get no synthetic ``default`` entry."""
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        "name: demo\napps:\n  api: {}\nvolumes:\n  minio_data: {}\n",
+    )
+    resolved = load_space(space_file)
+    pre_path, _, _ = render_overrides(resolved)
+    data = yaml.safe_load(pre_path.read_text())
+    assert "default" not in data["volumes"]
+
+
 def test_pre_override_defaults_container_name(tmp_path: Path) -> None:
     """Every declared service gets ``container_name: <space>-<svc>`` in the pre-override.
 

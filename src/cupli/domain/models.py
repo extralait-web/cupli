@@ -81,6 +81,19 @@ def _services_list_to_dict(value: object) -> object:
     return value
 
 
+def _coerce_null_block_values(value: object) -> object:
+    """Coerce ``{name: None}`` entries to ``{name: {}}`` in a top-level block.
+
+    A YAML entry with no body (``data:`` under ``volumes:``) parses its inner
+    value as ``None``; docker compose reads a null body as a default-driver
+    entry. Normalise it to an empty dict so the typed schema accepts the common
+    named-volume idiom.
+    """
+    if not isinstance(value, dict):
+        return value
+    return {key: ({} if inner is None else inner) for key, inner in value.items()}
+
+
 # --- atomic field types ----------------------------------------------------
 
 NameStr = Annotated[
@@ -121,6 +134,16 @@ DepMap = Annotated[
 
 ScalarMap = Annotated[dict[str, ScalarStr], BeforeValidator(_none_as_empty_dict)]
 """String-to-scalar map; ``key:`` with no value (YAML null) is treated as an empty dict."""
+
+ComposeBlockMap = Annotated[
+    dict[NameStr, dict[str, Any]],
+    BeforeValidator(_coerce_null_block_values),
+]
+"""Top-level compose block (``networks``/``volumes``/``secrets``/``configs``).
+
+Values are compose-spec verbatim. A null inner body (``data:`` with no
+mapping) is coerced to an empty dict so default-driver entries parse cleanly.
+"""
 
 
 # --- nested objects --------------------------------------------------------
@@ -366,6 +389,16 @@ class SpaceModel(_Frozen):
             accepted verbatim). Merged into ``docker-compose.pre.yml`` so the
             user can declare custom networks (e.g. with a fixed name or
             driver) alongside cupli's auto ``default`` attach.
+        volumes: optional top-level ``volumes:`` block. Named volumes are
+            declared verbatim into ``docker-compose.pre.yml`` so inline
+            services can reference them (e.g. ``minio_data:/data``) without a
+            separate compose file. No synthetic default is injected.
+        secrets: optional top-level ``secrets:`` block. Secret definitions are
+            declared verbatim so service-level ``secrets:`` references (e.g.
+            build secrets) resolve. No synthetic default is injected.
+        configs: optional top-level ``configs:`` block. Config definitions are
+            declared verbatim so service-level ``configs:`` references resolve.
+            No synthetic default is injected.
     """
 
     schema_version: Literal[1] = DEFAULT_SCHEMA_VERSION
@@ -380,7 +413,10 @@ class SpaceModel(_Frozen):
     mounts: dict[NameStr, MountModel] = Field(default_factory=dict)
     hooks: dict[NameStr, HooksOverride] = Field(default_factory=dict)
     commands: dict[NameStr, CommandShortcut] = Field(default_factory=dict)
-    networks: dict[NameStr, dict[str, Any]] = Field(default_factory=dict)
+    networks: ComposeBlockMap = Field(default_factory=dict)
+    volumes: ComposeBlockMap = Field(default_factory=dict)
+    secrets: ComposeBlockMap = Field(default_factory=dict)
+    configs: ComposeBlockMap = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> Self:

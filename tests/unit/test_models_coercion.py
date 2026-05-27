@@ -8,6 +8,9 @@ coercion and the JSON schema mirrors it via ``anyOf: [{string}, {array}]``.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from cupli.domain.models import AppModel, MountModel, SpaceModel
 
 
@@ -65,3 +68,35 @@ def test_envs_at_space_scope_accepts_single_string() -> None:
     """``envs: ./.env`` at the top level works just like at the app level."""
     space = SpaceModel.model_validate({"name": "demo", "envs": "./.env", "apps": {"api": {}}})
     assert space.envs == ["./.env"]
+
+
+def test_space_accepts_top_level_volumes_secrets_configs() -> None:
+    """``volumes`` / ``secrets`` / ``configs`` are accepted as compose-spec maps."""
+    space = SpaceModel.model_validate(
+        {
+            "name": "demo",
+            "apps": {"api": {}},
+            "volumes": {"minio_data": {"driver": "local"}},
+            "secrets": {"ci_token": {"environment": "CI_JOB_TOKEN"}},
+            "configs": {"app_cfg": {"file": "./cfg.yml"}},
+        },
+    )
+    assert space.volumes["minio_data"] == {"driver": "local"}
+    assert space.secrets["ci_token"] == {"environment": "CI_JOB_TOKEN"}
+    assert space.configs["app_cfg"] == {"file": "./cfg.yml"}
+
+
+def test_top_level_block_null_body_coerced_to_empty_dict() -> None:
+    """A named volume with no body (``minio_data:``) coerces to an empty dict."""
+    space = SpaceModel.model_validate(
+        {"name": "demo", "apps": {"api": {}}, "volumes": {"minio_data": None}},
+    )
+    assert space.volumes == {"minio_data": {}}
+
+
+def test_top_level_block_non_dict_value_rejected() -> None:
+    """A non-mapping block value raises a validation error (coercer passes it through)."""
+    with pytest.raises(ValidationError):
+        SpaceModel.model_validate(
+            {"name": "demo", "apps": {"api": {}}, "volumes": {"minio_data": ["x"]}},
+        )

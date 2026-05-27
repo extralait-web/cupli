@@ -219,6 +219,9 @@ cupli workspace unselect                    # вернуть cwd-detect
 | `hooks` | map[str, hook-override] | `{}` | Per-target тюнинг для `cupli hooks install`. |
 | `commands` | map[str, command-shortcut] | `{}` | `cupli sc <name>` / `cupli <name>` (с `top_level: true`). |
 | `networks` | map[str, dict] | `{}` | Top-level docker-compose `networks:`. Значения — compose-spec дословно (`driver`, `name`, `ipam`, …). Дефолтная сеть `default` добавляется автоматически. |
+| `volumes` | map[str, dict] | `{}` | Top-level docker-compose `volumes:`. Именованные тома (compose-spec дословно), чтобы inline-сервисы ссылались на них без отдельного compose-файла. Пустое тело (`minio_data:`) — том с драйвером по умолчанию. |
+| `secrets` | map[str, dict] | `{}` | Top-level docker-compose `secrets:`. Определения секретов (compose-spec дословно), на которые ссылаются `secrets:` уровня сервиса. |
+| `configs` | map[str, dict] | `{}` | Top-level docker-compose `configs:`. Определения конфигов (compose-spec дословно), на которые ссылаются `configs:` уровня сервиса. |
 
 ### `bases.<name>`
 
@@ -585,6 +588,29 @@ apps:
     service:
       image: ...
       networks: [monitoring]
+```
+
+### Именованные тома, секреты, конфиги
+
+Top-level `volumes:` / `secrets:` / `configs:` дословно сливаются в
+`docker-compose.pre.yml`, поэтому inline-сервис может ссылаться на них без
+отдельного compose-файла. Синтетический `default` не добавляется (в отличие от
+`networks`), а пустой блок в вывод не попадает.
+
+```yaml
+volumes:
+  minio_data:            # пустое тело == том с драйвером по умолчанию
+
+secrets:
+  ci_token:
+    environment: CI_JOB_TOKEN
+
+apps:
+  minio:
+    service:
+      image: minio/minio
+      command: server /data
+      volumes: [minio_data:/data]   # ссылка на том выше
 ```
 
 ---

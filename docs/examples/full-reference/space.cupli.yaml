@@ -291,6 +291,36 @@ networks:
 
 
 # =====================================================================
+#  VOLUMES / SECRETS / CONFIGS — top-level docker-compose blocks.
+#
+#  Declared verbatim into `docker-compose.pre.yml` so inline services
+#  can reference them without a separate compose file. No synthetic
+#  default is injected (unlike `networks`); an empty block is omitted.
+#
+#    services:
+#      minio:
+#        service:
+#          image: minio/minio
+#          volumes: ["minio_data:/data"]             # references the named volume below
+# =====================================================================
+volumes:
+
+  minio_data:                                        # null body == default-driver named volume
+  cache:
+    driver: local
+
+secrets:
+
+  ci_token:
+    environment: CI_JOB_TOKEN                        # value taken from the build environment
+
+configs:
+
+  app_config:
+    file: ./config/app.yml                           # config sourced from a host file
+
+
+# =====================================================================
 #  HOOK OVERRIDES — per-target tweaks for `cupli hooks install`.
 # =====================================================================
 hooks:

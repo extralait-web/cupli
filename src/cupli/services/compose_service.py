@@ -3,7 +3,8 @@
 Override generation splits into two files:
 
 - ``docker-compose.pre.yml`` (merged BEFORE user compose files): injects defaults
-  that user files may override — currently the shared network.
+  that user files may override — the shared network plus any top-level
+  ``volumes`` / ``secrets`` / ``configs`` blocks declared in the space.
 - ``docker-compose.post.yml`` (merged AFTER user compose files): injects forced
   values — mount volumes per hosted_in service, cross-file ``depends_on``.
 
@@ -77,7 +78,8 @@ def render_overrides(
 
     Produces:
 
-    - ``docker-compose.pre.yml`` — defaults (network, container_name).
+    - ``docker-compose.pre.yml`` — defaults (network, container_name) and
+      top-level ``volumes`` / ``secrets`` / ``configs`` blocks.
     - ``docker-compose.post.yml`` — cupli injections (env / ports / mounts / deps / networks).
     - ``docker-compose.inline.yml`` — services declared inline under
       ``apps.<x>.services.<y>`` with extra compose-syntax fields (omitted
@@ -251,26 +253,47 @@ def _build_override_pre(resolved: ResolvedSpace, declared: set[str]) -> dict:
 
     Provides:
 
-    - ``networks.default`` mapped to the workspace's project network.
-    - Any user-declared networks from ``space.networks:`` (compose-spec
-      verbatim) — merged alongside ``default``. ``default`` wins on key
-      collision so cupli's auto-attach stays predictable.
+    - ``networks.default`` mapped to the workspace's project network, alongside
+      any user-declared networks from ``space.networks:`` (compose-spec
+      verbatim). ``default`` wins on key collision so cupli's auto-attach stays
+      predictable.
+    - ``volumes`` / ``secrets`` / ``configs`` top-level blocks copied verbatim
+      from the space (no synthetic default; omitted entirely when empty).
     - ``services.<svc>.container_name`` defaulted to ``<space>-<svc>`` for every
       declared service. Compose merge resolves scalar conflicts to the *last*
       file, so any ``container_name`` in a user compose-fragment wins.
     """
-    network_name = resolved.space_vars["NETWORK"]
     project = resolved.space.name
     services = {svc: {"container_name": _default_container_name(project, svc)} for svc in sorted(declared)}
-    networks: dict[str, dict] = {name: dict(spec) for name, spec in resolved.space.networks.items()}
-    networks["default"] = {
-        "name": network_name,
-        "external": False,
-    }
-    document: dict = {"networks": networks}
+    document: dict = {"networks": _pre_networks(resolved)}
+    _add_top_level_blocks(document, resolved)
     if services:
         document["services"] = services
     return document
+
+
+def _pre_networks(resolved: ResolvedSpace) -> dict[str, dict]:
+    """Build the ``networks`` block: user-declared verbatim plus auto ``default``."""
+    networks: dict[str, dict] = {name: dict(spec) for name, spec in resolved.space.networks.items()}
+    networks["default"] = {"name": resolved.space_vars["NETWORK"], "external": False}
+    return networks
+
+
+def _add_top_level_blocks(document: dict, resolved: ResolvedSpace) -> None:
+    """Copy ``volumes`` / ``secrets`` / ``configs`` into the document verbatim.
+
+    Each block is emitted only when the space declares at least one entry, so
+    an absent block never appears as an empty ``volumes: {}`` in the output.
+    """
+    blocks = (
+        ("volumes", resolved.space.volumes),
+        ("secrets", resolved.space.secrets),
+        ("configs", resolved.space.configs),
+    )
+    for key, source in blocks:
+        if not source:
+            continue
+        document[key] = {name: dict(spec) for name, spec in source.items()}
 
 
 def _build_override_post(resolved: ResolvedSpace, declared: set[str]) -> dict:
