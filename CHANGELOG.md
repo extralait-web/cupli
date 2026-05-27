@@ -1,3 +1,41 @@
+# v0.4.0
+
+Feature release: workspace-command ergonomics and variable interpolation.
+
+## Features
+
+* **Undeclared command args pass through (+ `strict`).** When a
+  `commands.<name>` declares `args`, CLI tokens that don't match a declared arg
+  (flags and positionals) are forwarded verbatim to the end of the command —
+  e.g. `cupli sc deploy prod --force-recreate`. A new `strict: true` attribute
+  restores reject-unknown.
+* **`cupli sc <name>` are real, typed subcommands.** `sc` is now a group whose
+  subcommands resolve live from the active space (`-f` / `-s` / cwd, cold cache,
+  or freshly edited YAML); declared `args` parse, appear in `cupli sc <name>
+  --help`, and tab-complete. Completion is per-space (no cross-space leakage).
+* **Builtin compose verbs forward unknown flags.** `up` / `down` / `build` /
+  `pull` / `stop` / `restart` / `ps` / `logs` pass unknown flags through to
+  docker compose (e.g. `cupli up --force-recreate`); service names are not
+  mistaken for flags. Use the `--opt=value` form for value-taking flags.
+* **Bare `$VAR` interpolation.** `$VAR` is recognised alongside `${VAR}` and
+  `${VAR:-default}`; `$$` escapes a literal `$` (docker-compose convention).
+* **env-file values are interpolated against the cupli scope.** A value such as
+  `DATABASE_URL=postgres://db:${POSTGRES_PORT}/app` inside an env file now
+  resolves `${POSTGRES_PORT}` from `vars` / earlier env layers, so
+  port-dependent wiring and credential reuse can live in env files, not only in
+  `vars:`.
+* **Richer schema completion.** `service:` / `services:` compose-service fields
+  in the JSON schema were expanded to the compose-spec set (~88 properties:
+  `cpus`, `mem_limit`, `network_mode`, `sysctls`, `gpus`, `extends`, `develop`,
+  …) for accurate editor completion and hover docs.
+
+## Fixes
+
+* A declared `envs:` file is read with interpolation disabled, so python-dotenv
+  no longer collapses cupli-scope `${VAR}` references to empty strings.
+* A missing declared `envs:` file warns under `--strict-vars` (silent by
+  default to preserve optional `.env.local`).
+
 # v0.3.1
 
 Hotfix release.
