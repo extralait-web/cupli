@@ -77,8 +77,8 @@ def _walk_deps(
         if current in visited:
             continue
         visited.add(current)
-        for dep_name, dep_modes in resolved.space.apps[current].deps.items():
-            if mode is not None and DepMode(mode) not in dep_modes:
+        for dep_name, dep_spec in resolved.space.apps[current].deps.items():
+            if mode is not None and DepMode(mode) not in dep_spec.modes:
                 continue
             if dep_name not in visited:
                 pending.append(dep_name)
@@ -119,8 +119,8 @@ def _ready_nodes(
         for name in pending
         if all(
             dep not in pending
-            for dep, dep_modes in resolved.space.apps[name].deps.items()
-            if mode is None or DepMode(mode) in dep_modes
+            for dep, dep_spec in resolved.space.apps[name].deps.items()
+            if mode is None or DepMode(mode) in dep_spec.modes
         )
     }
 

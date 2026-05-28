@@ -58,6 +58,19 @@ class HookKind(str, Enum):
     MOUNT = "mount"
 
 
+class DepCondition(str, Enum):
+    """Compose-style start condition for a ``apps[*].deps[<name>]`` entry.
+
+    Mirrors docker-compose ``depends_on.<svc>.condition``. When the condition is
+    left unset, cupli auto-picks ``service_completed_successfully`` for a
+    dependency whose ``mode: oneshot`` and ``service_started`` otherwise.
+    """
+
+    SERVICE_STARTED = "service_started"
+    SERVICE_HEALTHY = "service_healthy"
+    SERVICE_COMPLETED_SUCCESSFULLY = "service_completed_successfully"
+
+
 class ExecuteMode(str, Enum):
     """Execution strategy for a multi-container ``commands[*]`` shortcut.
 

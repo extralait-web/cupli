@@ -239,7 +239,7 @@ def _patch_properties(node: Any) -> None:
         if name in STRING_OR_LIST_FIELDS:
             properties[name] = _wrap_anyof(definition, _scalar_string_alt())
         elif name == "deps":
-            properties[name] = _wrap_anyof(definition, _deps_array_alt())
+            properties[name] = _deps_schema(definition)
         elif name == "services":
             properties[name] = _wrap_anyof(definition, _services_list_alt())
         elif name == "run":
@@ -270,7 +270,7 @@ def _string_array_alt() -> dict[str, Any]:
 
 
 def _deps_array_alt() -> dict[str, Any]:
-    """The ``array of dependency names`` alternative for ``_deps_to_dict``-style fields."""
+    """The ``array of dependency names`` alternative for ``_deps_to_specs``-style fields."""
     return {
         "type": "array",
         "items": {
@@ -280,6 +280,48 @@ def _deps_array_alt() -> dict[str, Any]:
             "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
         },
     }
+
+
+def _deps_schema(definition: dict[str, Any]) -> dict[str, Any]:
+    """Build the full ``deps`` schema covering every accepted shorthand.
+
+    Accepts: list-of-names, or an object whose value is any of {null, condition
+    string, list of mode-tag strings, full :class:`DepSpec` object}. The
+    ``DepSpec`` ref comes from the pydantic-generated ``$defs``.
+    """
+    wrapper: dict[str, Any] = {}
+    for top_level in ("title", "description", "default"):
+        if top_level in definition:
+            wrapper[top_level] = definition[top_level]
+    wrapper["anyOf"] = [
+        _deps_array_alt(),
+        {
+            "type": "object",
+            "additionalProperties": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "string", "enum": [c.value for c in __dep_conditions()]},
+                    {"type": "array", "items": {"type": "string", "enum": [m.value for m in __dep_modes()]}},
+                    {"$ref": "#/$defs/DepSpec"},
+                ],
+            },
+        },
+    ]
+    return wrapper
+
+
+def __dep_conditions() -> Any:
+    """Defer import so :mod:`cupli` stays light at module load."""
+    from cupli.domain.enums import DepCondition
+
+    return DepCondition
+
+
+def __dep_modes() -> Any:
+    """Defer import so :mod:`cupli` stays light at module load."""
+    from cupli.domain.enums import DepMode
+
+    return DepMode
 
 
 def _services_list_alt() -> dict[str, Any]:

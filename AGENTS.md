@@ -264,6 +264,41 @@ apps:
       migrate: [ default ]          # backend waits for migrate to finish
 ```
 
+### "Wait for a healthy dependency instead of just `started`"
+
+`deps:` supports compose-style start conditions. The default is
+``service_started`` (or ``service_completed_successfully`` for a
+``mode: oneshot`` dep). Override with a string value (condition shorthand) or
+a full ``DepSpec`` mapping:
+
+```yaml
+apps:
+  core-back:
+    deps:
+      postgres: service_healthy            # wait for compose healthcheck to pass
+      redis: ~                              # default: service_started
+      mailcatcher: ~
+      minio: service_healthy
+      init-data:
+        condition: service_completed_successfully   # init container must exit cleanly
+        restart: true                       # restart `core-back` when init-data restarts
+        required: true                      # default; set false for a soft dep
+```
+
+Mode-tag list form (`worker: [default, hook]`) still works for ``--mode``
+filtering — those two name spaces (``default``/``hook``/``full`` modes vs
+``service_*`` conditions) don't collide. The full form lets you set
+``modes`` alongside ``condition`` / ``restart`` / ``required`` in one place:
+
+```yaml
+    deps:
+      worker:
+        modes: [default, hook]
+        condition: service_healthy
+```
+
+Cupli renders these straight into compose ``depends_on.<svc>``.
+
 ### "Share a SDK between two apps via mount"
 
 ```yaml

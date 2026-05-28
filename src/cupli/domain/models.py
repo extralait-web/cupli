@@ -29,7 +29,7 @@ from cupli.domain.consts import (
     TAG_PATTERN,
     VERSION_PATTERN,
 )
-from cupli.domain.enums import DepMode, ExecuteMode, MacVolumeMode, MountMode, ServiceMode
+from cupli.domain.enums import DepCondition, DepMode, ExecuteMode, MacVolumeMode, MountMode, ServiceMode
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z][\w-]*)\s*\}\}")
 """Matches ``{{name}}`` argument placeholders inside a command's ``run`` line."""
@@ -57,14 +57,41 @@ def _wrap_str_as_list(value: object) -> object:
     return value
 
 
-def _deps_to_dict(value: object) -> object:
-    """Accept either a list of names or a dict of name → mode-list.
+def _deps_to_specs(value: object) -> object:
+    """Normalise a ``deps:`` declaration into ``{name: dep-spec dict}``.
 
-    Lists ``[a, b]`` are normalised to ``{a: [default], b: [default]}``.
+    Accepted input forms (back-compat preserved):
+
+    - list of names ``[postgres, redis]`` → ``{postgres: {}, redis: {}}``
+      (each name uses the default DepSpec — default mode, auto condition).
+    - dict whose value is:
+
+      - ``None`` (YAML ``~``) → ``{}`` (defaults).
+      - a string (a :class:`DepCondition` value) → ``{condition: <value>}``.
+      - a list of strings → ``{modes: <list>}`` (back-compat with mode tags).
+      - a dict → passed through verbatim (full ``DepSpec`` spec).
+
+    The mode tag (cupli-side ``default``/``hook``/``full``) and the compose
+    condition (``service_started``/``service_healthy``/``service_completed_successfully``)
+    occupy disjoint name spaces, so a bare string is unambiguous.
     """
     if isinstance(value, list):
-        return {item: [DepMode.DEFAULT.value] for item in value}
-    return value
+        return {item: {} for item in value}
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, object] = {}
+    for name, raw in value.items():
+        if raw is None:
+            result[name] = {}
+            continue
+        if isinstance(raw, str):
+            result[name] = {"condition": raw}
+            continue
+        if isinstance(raw, list):
+            result[name] = {"modes": raw}
+            continue
+        result[name] = raw
+    return result
 
 
 def _none_as_empty_dict(value: object) -> object:
@@ -158,11 +185,42 @@ NameList = Annotated[list[NameStr], BeforeValidator(_wrap_str_as_list)]
 TagList = Annotated[list[TagStr], BeforeValidator(_wrap_str_as_list)]
 """List of tag identifiers; bare string is wrapped into a one-element list."""
 
+
+class DepSpec(BaseModel):
+    """One ``apps[*].deps[<name>]`` entry.
+
+    Captures both cupli's per-dep ``modes`` tags (used for ``cupli up --mode``
+    filtering) and the docker-compose ``depends_on`` semantics: ``condition``,
+    ``restart``, and ``required``. The list/string/null short forms in YAML
+    are normalised into this spec by :func:`_deps_to_specs` before validation.
+
+    Attributes:
+        modes: cupli-side mode tags. A dep is walked by ``--mode <m>`` only
+            when ``m`` is in this list.
+        condition: compose start condition. ``None`` (default) → cupli picks
+            ``service_completed_successfully`` for a ``mode: oneshot`` dep and
+            ``service_started`` otherwise.
+        restart: when True, compose restarts the depending service if the
+            dependency restarts (compose ``depends_on.<svc>.restart``).
+        required: when False, the dep is "soft" — compose still starts the
+            depending service if the dep cannot start (compose
+            ``depends_on.<svc>.required: false``). Default True.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    modes: list[DepMode] = Field(default_factory=lambda: [DepMode.DEFAULT])
+    condition: DepCondition | None = None
+    restart: bool = False
+    required: bool = True
+
+
 DepMap = Annotated[
-    dict[NameStr, list[DepMode]],
-    BeforeValidator(_deps_to_dict),
+    dict[NameStr, DepSpec],
+    BeforeValidator(_deps_to_specs),
 ]
-"""Mapping from dependency name to its mode tags."""
+"""Mapping from dependency name to a :class:`DepSpec`. Short YAML forms are
+coerced — see :func:`_deps_to_specs`."""
 
 ScalarMap = Annotated[dict[str, ScalarStr], BeforeValidator(_none_as_empty_dict)]
 """String-to-scalar map; ``key:`` with no value (YAML null) is treated as an empty dict."""
@@ -649,6 +707,7 @@ __all__ = (
     "BaseAppModel",
     "CommandArg",
     "CommandShortcut",
+    "DepSpec",
     "HooksOverride",
     "MountModel",
     "NameList",

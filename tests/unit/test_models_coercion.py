@@ -152,3 +152,64 @@ def test_command_invalid_declarations_rejected(cmd: dict) -> None:
     """Contradictory arg declarations and unknown containers are rejected."""
     with pytest.raises(ValidationError):
         SpaceModel.model_validate(_command(cmd))
+
+
+def _deps_app(deps: object) -> dict:
+    return {"name": "demo", "apps": {"api": {"deps": deps}, "worker": {}}}
+
+
+def test_deps_list_form_yields_default_spec() -> None:
+    """``deps: [worker]`` produces a default :class:`DepSpec` for each name."""
+    space = SpaceModel.model_validate(_deps_app(["worker"]))
+    spec = space.apps["api"].deps["worker"]
+    assert spec.condition is None
+    assert spec.restart is False
+    assert spec.required is True
+
+
+def test_deps_null_value_yields_default_spec() -> None:
+    """``deps: {worker: ~}`` coerces to a default :class:`DepSpec`."""
+    space = SpaceModel.model_validate(_deps_app({"worker": None}))
+    spec = space.apps["api"].deps["worker"]
+    assert spec.condition is None
+    assert spec.required is True
+
+
+def test_deps_string_value_is_condition_shorthand() -> None:
+    """``deps: {worker: service_healthy}`` sets ``condition`` on the spec."""
+    space = SpaceModel.model_validate(_deps_app({"worker": "service_healthy"}))
+    assert space.apps["api"].deps["worker"].condition.value == "service_healthy"
+
+
+def test_deps_list_value_preserves_mode_tags() -> None:
+    """``deps: {worker: [default, hook]}`` sets ``modes`` (back-compat with mode tags)."""
+    space = SpaceModel.model_validate(_deps_app({"worker": ["default", "hook"]}))
+    spec = space.apps["api"].deps["worker"]
+    assert [m.value for m in spec.modes] == ["default", "hook"]
+    assert spec.condition is None
+
+
+def test_deps_dict_value_is_full_spec() -> None:
+    """A dict value populates ``condition`` / ``restart`` / ``required`` / ``modes``."""
+    space = SpaceModel.model_validate(
+        _deps_app(
+            {
+                "worker": {
+                    "condition": "service_completed_successfully",
+                    "restart": True,
+                    "required": False,
+                    "modes": ["default"],
+                },
+            },
+        ),
+    )
+    spec = space.apps["api"].deps["worker"]
+    assert spec.condition.value == "service_completed_successfully"
+    assert spec.restart is True
+    assert spec.required is False
+
+
+def test_deps_invalid_condition_rejected() -> None:
+    """An unknown condition string raises a validation error."""
+    with pytest.raises(ValidationError):
+        SpaceModel.model_validate(_deps_app({"worker": "not_a_condition"}))

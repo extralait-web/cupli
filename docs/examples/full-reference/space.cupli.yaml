@@ -181,8 +181,13 @@ apps:
       GIT_SSL_NO_VERIFY: "false"
     bases: [python_runtime, pg_client]
     deps:
-      postgres: [default]                          # cross-app depends_on (mode-filtered)
-      migrate: [default]
+      postgres: service_healthy                    # wait for compose healthcheck before start
+      migrate:                                     # full spec form
+        condition: service_completed_successfully  # init step must exit cleanly
+        modes: [default]                            # mode-tag filter for `cupli up --mode <m>`
+        restart: true                              # restart api when migrate is restarted
+        required: true                             # default; set false for a soft dep
+      # `redis: ~` (null) → default DepSpec — equivalent to `redis: [default]`
     tags: [backend, system]
     mode: up
     composes:

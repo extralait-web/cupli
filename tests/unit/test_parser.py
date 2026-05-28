@@ -45,7 +45,9 @@ def test_parses_with_bases(spaces_dir: Path) -> None:
 
     api = model.apps["api"]
     assert api.bases == ["python_runtime", "pg_client"]
-    assert api.deps == {"worker": [DepMode.DEFAULT]}
+    assert list(api.deps) == ["worker"]
+    assert api.deps["worker"].modes == [DepMode.DEFAULT]
+    assert api.deps["worker"].condition is None
     assert api.tags == ["backend"]
     assert set(model.bases) == {"python_runtime", "pg_client"}
 
@@ -162,4 +164,5 @@ def test_list_deps_converted_to_dict(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     model, _ = parse_space_file(space_file)
-    assert model.apps["api"].deps == {"worker": [DepMode.DEFAULT]}
+    assert list(model.apps["api"].deps) == ["worker"]
+    assert model.apps["api"].deps["worker"].modes == [DepMode.DEFAULT]

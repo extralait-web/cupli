@@ -250,7 +250,7 @@ schema with one-line descriptions.
 | `post_clone` | string | — | Shell command run on host after clone. |
 | `init_vars` | map | `{}` | Env exported to clone + `post_clone`. |
 | `bases` | list[string] | `[]` | Bases to inherit (C3 multi-inherit). |
-| `deps` | map[str, list[modes]] | `{}` | Cross-app `depends_on` (mode-filtered). |
+| `deps` | list[str] \| map[str, …] | `{}` | Cross-app `depends_on`. List form `[a, b]` or map with per-dep settings (mode tags for `--mode` filtering, compose condition / restart / required). See [Dependency conditions](#dependency-conditions). |
 | `tags` | list[string] | `[]` | For `cupli up --tag <tag>`. |
 | `mode` | enum | `up` | `up` (long-running), `oneshot` (run-once), `disabled`. |
 | `composes` | list[string] | `[]` | External compose files. |
@@ -439,6 +439,27 @@ bases and mounts. Override per-component with an explicit `path:`.
 mode-list. Use it to express dev-vs-prod-style dependency sets:
 `api: {deps: {redis: [default, full]}}` pulls redis on both modes;
 `audit: {deps: {redis: [full]}}` skips it under `--mode default`.
+
+### Dependency conditions
+
+`deps:` accepts compose-style start conditions per dependency. Default is
+`service_started` (or `service_completed_successfully` for a `mode: oneshot`
+dep). String value = condition shorthand; null = defaults; list = mode tags
+(back-compat with `--mode` filtering); mapping = full spec.
+
+```yaml
+apps:
+  api:
+    deps:
+      postgres: service_healthy             # wait for healthcheck
+      redis: ~                              # default: service_started
+      init-data:
+        condition: service_completed_successfully
+        restart: true                       # restart api when init-data restarts
+        required: false                     # api still starts if init-data can't
+```
+
+These map straight onto compose `depends_on.<svc>.{condition,restart,required}`.
 
 ### Exec / run
 

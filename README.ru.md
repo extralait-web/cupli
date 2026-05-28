@@ -250,7 +250,7 @@ cupli workspace unselect                    # вернуть cwd-detect
 | `post_clone` | string | — | Shell-команда после clone. |
 | `init_vars` | map | `{}` | Env для clone + `post_clone`. |
 | `bases` | list[string] | `[]` | Bases (C3 multi-inherit). |
-| `deps` | map[str, list[modes]] | `{}` | Кросс-app `depends_on` (с фильтрами mode). |
+| `deps` | list[str] \| map[str, …] | `{}` | Кросс-app `depends_on`. List `[a, b]` или map с per-dep настройками (mode tags для `--mode`, compose condition / restart / required). См. [Условия зависимостей](#условия-зависимостей). |
 | `tags` | list[string] | `[]` | Для `cupli up --tag <tag>`. |
 | `mode` | enum | `up` | `up` (long-running), `oneshot` (run-once), `disabled`. |
 | `composes` | list[string] | `[]` | Внешние compose-файлы. |
@@ -436,6 +436,27 @@ bases и mounts. Override per-component через явный `path:`.
 Полезно для dev-vs-prod-style зависимостей: `api: {deps: {redis: [default, full]}}`
 подтянет redis в обоих режимах; `audit: {deps: {redis: [full]}}` пропустит
 его при `--mode default`.
+
+### Условия зависимостей
+
+`deps:` поддерживает compose-style условия запуска. Default —
+`service_started` (или `service_completed_successfully` для зависимости с
+`mode: oneshot`). Строковое значение = condition shorthand; null = defaults;
+список = mode tags (back-compat с `--mode`); mapping = полная спецификация.
+
+```yaml
+apps:
+  api:
+    deps:
+      postgres: service_healthy             # ждать healthcheck
+      redis: ~                              # default: service_started
+      init-data:
+        condition: service_completed_successfully
+        restart: true                       # перезапустить api при перезапуске init-data
+        required: false                     # api стартует даже если init-data не поднялся
+```
+
+Эти поля проксируются в compose `depends_on.<svc>.{condition,restart,required}`.
 
 ### Exec / run
 

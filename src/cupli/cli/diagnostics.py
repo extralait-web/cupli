@@ -37,7 +37,7 @@ def graph_command(ctx: typer.Context) -> None:
         if app.bases:
             node.add(f"[dim]bases: {', '.join(app.bases)}[/dim]")
         if app.deps:
-            deps_str = ", ".join(f"{dep} [{','.join(m.value for m in modes)}]" for dep, modes in app.deps.items())
+            deps_str = ", ".join(f"{dep} [{','.join(m.value for m in spec.modes)}]" for dep, spec in app.deps.items())
             node.add(f"[yellow]deps:[/yellow] {deps_str}")
     if resolved.space.mounts:
         mounts_node = root.add("[bold]mounts[/bold]")

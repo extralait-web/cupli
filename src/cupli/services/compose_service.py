@@ -430,10 +430,11 @@ def _inject_cross_file_deps(resolved: ResolvedSpace, services: dict, declared: s
 
     Every service managed by the depending app gets the ``depends_on`` entry;
     the target side resolves to the depended-on app's PRIMARY service (the
-    first one in its ``services:`` map, or its ``service:`` shorthand). When
-    the dependency app is ``mode: oneshot``, the condition is
-    ``service_completed_successfully`` so the depending services wait for the
-    one-off command to exit cleanly before starting.
+    first one in its ``services:`` map, or its ``service:`` shorthand). The
+    ``condition`` is taken from the :class:`DepSpec` when set, otherwise cupli
+    picks ``service_completed_successfully`` for a ``mode: oneshot`` dep and
+    ``service_started`` for anything else. ``restart`` and ``required`` are
+    forwarded verbatim when they differ from compose's defaults.
     """
     for app_name, app in resolved.space.apps.items():
         if not app.deps:
@@ -443,13 +444,27 @@ def _inject_cross_file_deps(resolved: ResolvedSpace, services: dict, declared: s
                 continue
             block = services.setdefault(svc_name, {})
             depends = block.setdefault("depends_on", {})
-            for dep_name in app.deps:
+            for dep_name, dep_spec in app.deps.items():
                 dep_svc = _primary_service(resolved, dep_name)
                 if dep_svc not in declared:
                     continue
-                dep_mode = resolved.space.apps[dep_name].mode
-                condition = "service_completed_successfully" if dep_mode is ServiceMode.ONESHOT else "service_started"
-                depends.setdefault(dep_svc, {"condition": condition})
+                depends.setdefault(dep_svc, _depends_entry(resolved, dep_name, dep_spec))
+
+
+def _depends_entry(resolved: ResolvedSpace, dep_name: str, dep_spec) -> dict[str, object]:
+    """Build the ``depends_on.<dep>`` entry from a :class:`DepSpec`."""
+    condition = dep_spec.condition
+    if condition is None:
+        dep_mode = resolved.space.apps[dep_name].mode
+        condition = "service_completed_successfully" if dep_mode is ServiceMode.ONESHOT else "service_started"
+    else:
+        condition = condition.value
+    entry: dict[str, object] = {"condition": condition}
+    if dep_spec.restart:
+        entry["restart"] = True
+    if not dep_spec.required:
+        entry["required"] = False
+    return entry
 
 
 def _inject_default_networks(declared: set[str], services: dict) -> None:

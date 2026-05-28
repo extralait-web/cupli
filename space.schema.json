@@ -110,19 +110,36 @@
               }
             },
             {
-              "patternProperties": {
-                "^[A-Za-z][A-Za-z0-9_-]*$": {
-                  "items": {
-                    "$ref": "#/$defs/DepMode"
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "null"
                   },
-                  "type": "array"
-                }
-              },
-              "propertyNames": {
-                "maxLength": 64,
-                "minLength": 1
-              },
-              "type": "object"
+                  {
+                    "type": "string",
+                    "enum": [
+                      "service_started",
+                      "service_healthy",
+                      "service_completed_successfully"
+                    ]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "default",
+                        "hook",
+                        "full"
+                      ]
+                    }
+                  },
+                  {
+                    "$ref": "#/$defs/DepSpec"
+                  }
+                ]
+              }
             }
           ]
         },
@@ -516,6 +533,16 @@
       "title": "CommandShortcut",
       "type": "object"
     },
+    "DepCondition": {
+      "description": "Compose-style start condition for a ``apps[*].deps[<name>]`` entry.\n\nMirrors docker-compose ``depends_on.<svc>.condition``. When the condition is\nleft unset, cupli auto-picks ``service_completed_successfully`` for a\ndependency whose ``mode: oneshot`` and ``service_started`` otherwise.",
+      "enum": [
+        "service_started",
+        "service_healthy",
+        "service_completed_successfully"
+      ],
+      "title": "DepCondition",
+      "type": "string"
+    },
     "DepMode": {
       "description": "Dependency mode tag on ``apps[*].deps[<svc>]``.\n\nA dependency starts only when the invocation's mode intersects its mode\nset. ``DEFAULT`` covers the common ``cupli start`` path.",
       "enum": [
@@ -525,6 +552,42 @@
       ],
       "title": "DepMode",
       "type": "string"
+    },
+    "DepSpec": {
+      "additionalProperties": false,
+      "description": "One ``apps[*].deps[<name>]`` entry.\n\nCaptures both cupli's per-dep ``modes`` tags (used for ``cupli up --mode``\nfiltering) and the docker-compose ``depends_on`` semantics: ``condition``,\n``restart``, and ``required``. The list/string/null short forms in YAML\nare normalised into this spec by :func:`_deps_to_specs` before validation.\n\nAttributes:\n    modes: cupli-side mode tags. A dep is walked by ``--mode <m>`` only\n        when ``m`` is in this list.\n    condition: compose start condition. ``None`` (default) → cupli picks\n        ``service_completed_successfully`` for a ``mode: oneshot`` dep and\n        ``service_started`` otherwise.\n    restart: when True, compose restarts the depending service if the\n        dependency restarts (compose ``depends_on.<svc>.restart``).\n    required: when False, the dep is \"soft\" — compose still starts the\n        depending service if the dep cannot start (compose\n        ``depends_on.<svc>.required: false``). Default True.",
+      "properties": {
+        "modes": {
+          "items": {
+            "$ref": "#/$defs/DepMode"
+          },
+          "title": "Modes",
+          "type": "array"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DepCondition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "restart": {
+          "default": false,
+          "title": "Restart",
+          "type": "boolean"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "title": "DepSpec",
+      "type": "object"
     },
     "ExecuteMode": {
       "description": "Execution strategy for a multi-container ``commands[*]`` shortcut.\n\n``SEQUENTIAL`` runs containers one by one and stops at the first failure\n(fail-fast). ``CONTINUE`` runs every container regardless of failures and\nreports an aggregate result. ``PARALLEL`` runs them concurrently, capturing\neach container's output to avoid interleaving.",

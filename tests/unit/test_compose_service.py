@@ -273,6 +273,46 @@ def test_post_override_injects_cross_file_depends_on(tmp_path: Path) -> None:
     }
 
 
+def test_post_override_honours_dep_condition_shorthand(tmp_path: Path) -> None:
+    """``deps: {worker: service_healthy}`` lands in compose as the condition."""
+    compose = _write_compose(tmp_path, "api", "worker")
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        (
+            "name: demo\napps:\n"
+            f"  api:\n    composes: ['{compose}']\n    deps:\n      worker: service_healthy\n"
+            f"  worker:\n    composes: ['{compose}']\n"
+        ),
+    )
+    resolved = load_space(space_file)
+    _, post_path, _ = render_overrides(resolved)
+    data = yaml.safe_load(post_path.read_text())
+    assert data["services"]["api"]["depends_on"] == {
+        "worker": {"condition": "service_healthy"},
+    }
+
+
+def test_post_override_forwards_restart_and_required(tmp_path: Path) -> None:
+    """The full ``DepSpec`` form forwards ``restart`` / ``required`` to compose."""
+    compose = _write_compose(tmp_path, "api", "worker")
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        (
+            "name: demo\napps:\n"
+            f"  api:\n    composes: ['{compose}']\n    deps:\n"
+            "      worker:\n        condition: service_healthy\n        restart: true\n        required: false\n"
+            f"  worker:\n    composes: ['{compose}']\n"
+        ),
+    )
+    resolved = load_space(space_file)
+    _, post_path, _ = render_overrides(resolved)
+    data = yaml.safe_load(post_path.read_text())
+    entry = data["services"]["api"]["depends_on"]["worker"]
+    assert entry["condition"] == "service_healthy"
+    assert entry["restart"] is True
+    assert entry["required"] is False
+
+
 def test_write_env_file_dumps_resolved_vars(tmp_path: Path) -> None:
     """``write_env_file`` writes one ``KEY=VALUE`` per resolved space variable."""
     space_file = _write(
