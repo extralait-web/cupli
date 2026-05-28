@@ -1,3 +1,19 @@
+# v0.4.1
+
+Patch release.
+
+## Fixes
+
+* **Pre-create host placeholders for sub-mounts under bind targets.** Docker
+  daemon (running as root) creates a missing mount point on demand, so under a
+  bind ``host:/app`` plus sub-mounts targeting ``/app/<sub>`` (named volumes,
+  cupli mounts, additional binds) the daemon ended up creating those host
+  placeholders as **root** — leaving root-owned junk on the host. Cupli now
+  resolves the merged compose config before ``up`` / ``build`` / ``run`` /
+  ``watch`` and pre-creates each placeholder as the current user; the daemon
+  finds an existing mount point and skips the root creation. Idempotent and
+  silent on every failure mode — prep never blocks compose.
+
 # v0.4.0
 
 Feature release: workspace-command ergonomics and variable interpolation.
