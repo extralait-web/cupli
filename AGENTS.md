@@ -462,6 +462,18 @@ E002 Validation failed
   daemon does not create them as root. The placeholders are empty dirs (or a
   touched file when the sub-mount binds a single file); they are safe to
   delete and will be recreated.
+
+  **File placeholders are created read-only on the host.** The empty 0-byte
+  file is only a mount point — docker overlays the bind source on top, and the
+  container sees the real content. The host file stays empty by design and is
+  ``chmod 0o444`` so IDEs and humans don't try to edit it. Docker mount
+  ignores host perms, so the running container is unaffected.
+
+* **Cupli changes that affect mounts only apply to NEWLY created containers.**
+  After upgrading cupli (or changing the workspace's mount / compose layout),
+  recreate running containers with ``cupli restart --hard`` (or ``cupli down
+  && cupli up -d``). The mount-target prep step runs before each ``up``, but
+  it cannot re-mount inside a container that is already running.
 * **A pinned `branch:` does NOT auto-switch the working tree.** Cupli
   reports drift; you opt in to switch via `cupli git checkout`.
 * **`vars:` at app-level land in `environment:` of every service the

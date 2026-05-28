@@ -97,6 +97,10 @@ def _materialise_sub_mounts(volumes: list[dict[str, Any]], binds: list[dict[str,
         if volume.get("type") == "bind" and volume.get("source") and Path(volume["source"]).is_file():
             host_target.parent.mkdir(parents=True, exist_ok=True)
             host_target.touch(exist_ok=True)
+            # Read-only on host: the file is a mount point, real content lives at
+            # the bind source. Read-only stops IDEs and humans from editing the
+            # empty placeholder by mistake (docker mount ignores host perms).
+            host_target.chmod(0o444)
             continue
         host_target.mkdir(parents=True, exist_ok=True)
 

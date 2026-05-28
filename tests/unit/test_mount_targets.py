@@ -104,7 +104,7 @@ def test_creates_file_placeholder_for_bind_file_under_bind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bind whose source is a file (e.g. ``mkdocs.yml``) becomes a touched file."""
+    """A bind whose source is a file (e.g. ``mkdocs.yml``) becomes a read-only placeholder."""
     bind_src = tmp_path / "src" / "back"
     bind_src.mkdir(parents=True)
     config_file = tmp_path / "config" / "mkdocs.yml"
@@ -126,6 +126,36 @@ def test_creates_file_placeholder_for_bind_file_under_bind(
     prepare_mount_targets(_FakePlan(project_dir=tmp_path))
     placeholder = bind_src / "mkdocs.yml"
     assert placeholder.is_file()
+    # File placeholder is read-only on host to signal "do not edit — real content
+    # lives at the bind source". Docker mount ignores host perms.
+    assert placeholder.stat().st_mode & 0o222 == 0
+
+
+def test_file_placeholder_prep_is_idempotent_on_readonly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second prep over an existing read-only file placeholder does not raise."""
+    bind_src = tmp_path / "back"
+    bind_src.mkdir()
+    config_file = tmp_path / "mkdocs.yml"
+    config_file.write_text("real", encoding="utf-8")
+    _patch_compose_config(
+        monkeypatch,
+        {
+            "services": {
+                "api": {
+                    "volumes": [
+                        {"type": "bind", "source": str(bind_src), "target": "/app"},
+                        {"type": "bind", "source": str(config_file), "target": "/app/mkdocs.yml"},
+                    ],
+                },
+            },
+        },
+    )
+    prepare_mount_targets(_FakePlan(project_dir=tmp_path))
+    prepare_mount_targets(_FakePlan(project_dir=tmp_path))  # must not raise
+    assert (bind_src / "mkdocs.yml").stat().st_mode & 0o222 == 0
 
 
 def test_skips_when_no_binds(
