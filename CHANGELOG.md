@@ -1,3 +1,18 @@
+# v0.5.1
+
+Patch release.
+
+## Fixes
+
+* **`cupli --list` works under typer ≥0.25 / click ≥8.4.** Newer typer
+  restructured the class hierarchy so ``TyperGroup`` is no longer a subclass
+  of ``click.Group``. The ``isinstance(cmd, click.Group)`` guard in
+  ``_list_commands`` and the builtin-collision check silently returned an
+  empty group, hiding every command from ``cupli --list``. The guard now
+  duck-types ``obj.commands`` so cupli is compatible with both old and new
+  typer/click lines. ``cupli --list`` and top-level shortcut promotion work
+  under a fresh ``pipx install`` again.
+
 # v0.5.0
 
 Feature release: compose-style start conditions for `apps[*].deps`.
