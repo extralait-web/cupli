@@ -737,6 +737,10 @@ def build_env(plan: CompiledPlan) -> dict[str, str]:
     }
 
 
+_MOUNT_PREP_VERBS: frozenset[str] = frozenset({"up", "build", "run", "watch"})
+"""Compose verbs that materialise mounts and benefit from pre-created targets."""
+
+
 def invoke(
     plan: CompiledPlan,
     command_args: Sequence[str],
@@ -750,7 +754,16 @@ def invoke(
     vars (see :func:`build_env`) rather than long ``-f`` / ``--project-name``
     flags. Keeps the argv readable in debug logs and lets users invoke
     ``docker compose ...`` directly with the same env (via ``cupli wrap``).
+
+    Verbs that materialise mounts (``up`` / ``build`` / ``run`` / ``watch``)
+    are preceded by :func:`prepare_mount_targets` so host placeholders for
+    sub-mounts under bind targets are created as the cupli user, not as
+    root by the docker daemon.
     """
+    if command_args and command_args[0] in _MOUNT_PREP_VERBS:
+        from cupli.services.mount_targets import prepare_mount_targets
+
+        prepare_mount_targets(plan)
     argv = build_argv(plan, command_args)
     env = build_env(plan)
     return run_command(argv, cwd=plan.project_dir, env=env, stream=stream, check=check)

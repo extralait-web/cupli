@@ -454,6 +454,14 @@ E002 Validation failed
 
 * **`override.*.yml` files in `.locals/` are generated.** Don't edit
   them. Edit `space.cupli.yaml` and re-run cupli.
+* **Sub-mount placeholders on the host are pre-created by cupli.** Before
+  ``cupli up`` / ``build`` / ``run`` / ``watch`` cupli resolves the merged
+  compose config and creates host paths for every mount whose container target
+  sits under a bind target (e.g. a named volume `/app/.venv` under a bind
+  `${APP_PATH}:/app`). They are created **as the cupli user**, so the docker
+  daemon does not create them as root. The placeholders are empty dirs (or a
+  touched file when the sub-mount binds a single file); they are safe to
+  delete and will be recreated.
 * **A pinned `branch:` does NOT auto-switch the working tree.** Cupli
   reports drift; you opt in to switch via `cupli git checkout`.
 * **`vars:` at app-level land in `environment:` of every service the
