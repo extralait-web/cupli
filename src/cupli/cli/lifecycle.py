@@ -131,18 +131,34 @@ def restart_command(
 @suppress_known_exceptions
 def down_command(
     ctx: typer.Context,
+    services: Annotated[
+        list[str] | None,
+        typer.Argument(help="Service names to take down. Omit to tear the whole workspace down."),
+    ] = None,
     volumes: Annotated[bool, typer.Option("--volumes", "-v", help="Also remove volumes.")] = False,
     images: Annotated[bool, typer.Option("--images", help="Also remove built images.")] = False,
 ) -> None:
-    """Tear the workspace down (``docker compose down``). Unknown flags pass through."""
-    flags, _ = _compose_passthrough(ctx, None)
-    _, plan = _plan(ctx, [], [])
+    """Tear services down (``docker compose down``).
+
+    Without ``services`` arguments the whole workspace goes down. With service
+    names, only those containers are stopped and removed (``docker compose
+    down`` supports per-service arguments in compose v2). Unknown flags pass
+    through to docker compose.
+    """
+    flags, names = _compose_passthrough(ctx, services)
     args = ["down", "--remove-orphans"]
     if volumes:
         args.append("--volumes")
     if images:
         args.extend(["--rmi", "local"])
     args.extend(flags)
+    if names:
+        # Named services → resolve through the plan and forward only them.
+        _, plan = _plan(ctx, names, [])
+        args.extend(plan.services)
+    else:
+        # No services → workspace-level down (default).
+        _, plan = _plan(ctx, [], [])
     invoke(plan, args)
 
 

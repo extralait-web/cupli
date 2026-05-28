@@ -160,6 +160,44 @@ def test_down_with_volumes_and_images_propagates_flags(
     assert "local" in last
 
 
+def test_down_forwards_named_service(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli down api`` forwards the service name so only that container goes down.
+
+    Earlier versions silently dropped the positional and tore the whole stack
+    down — regression test for that bug.
+    """
+    _ = isolated_registry
+    space = _space(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "down", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "down"
+    assert "api" in last
+
+
+def test_down_without_service_remains_workspace_wide(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli down`` (no service) still tears the whole workspace down."""
+    _ = isolated_registry
+    space = _space(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "down"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "down"
+    assert "--remove-orphans" in last
+    # No stray service names beyond the cupli flags
+    assert all(token.startswith("-") or token in {"down", "--remove-orphans", "local"} for token in last)
+
+
 def test_ps_emits_ps_argv(
     runner: CliRunner,
     tmp_path: Path,
