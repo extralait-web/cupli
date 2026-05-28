@@ -623,6 +623,30 @@ def _plan_services(
     return tuple(out)
 
 
+def target_services(resolved: ResolvedSpace, names: Sequence[str]) -> tuple[str, ...]:
+    """Resolve user-named app/service seeds to compose service names without walking deps.
+
+    Per-service lifecycle verbs (``restart``, ``stop``, ``down``, ``build``,
+    ``pull``, ``ps``) act exactly on what the user named; pulling in transitive
+    dependencies via ``closure`` would surprise the user — ``cupli restart api``
+    would restart every database the app depends on too. ``cupli up`` keeps the
+    closure-expanded plan because deps must be started first.
+
+    Args:
+        resolved: a :class:`ResolvedSpace` produced by :func:`load_space`.
+        names: app or compose-service names supplied by the user. App names
+            expand to every compose service the app manages (compound apps).
+            Service names appear verbatim. Empty input returns an empty tuple.
+
+    Returns:
+        Stable, deduplicated compose service names in user-supplied order.
+    """
+    if not names:
+        return ()
+    seeds, svc_filter = _split_seed_names(resolved, names)
+    return _plan_services(resolved, seeds, svc_filter)
+
+
 def _validate_services_declared(
     resolved: ResolvedSpace,
     plan_services: tuple[str, ...],
@@ -792,5 +816,6 @@ __all__ = (
     "invoke",
     "make_plan",
     "render_overrides",
+    "target_services",
     "write_env_file",
 )

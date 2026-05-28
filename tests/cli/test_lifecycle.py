@@ -198,6 +198,154 @@ def test_down_without_service_remains_workspace_wide(
     assert all(token.startswith("-") or token in {"down", "--remove-orphans", "local"} for token in last)
 
 
+def _space_with_deps(tmp_path: Path) -> Path:
+    """Two-app workspace: ``api`` depends on ``db`` via ``apps[*].deps``."""
+    space = tmp_path / "space.cupli.yaml"
+    space.write_text(
+        "\n".join(
+            [
+                "name: demo",
+                "apps:",
+                "  db:",
+                "    service:",
+                "      image: postgres:16",
+                "  api:",
+                "    service:",
+                "      image: alpine:3.20",
+                "    deps:",
+                "      db: {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return space
+
+
+def test_restart_named_service_skips_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli restart api`` restarts only ``api`` — ``db`` (a dep) stays untouched.
+
+    Earlier versions used the closure-expanded ``plan.services`` and would
+    restart the whole dep chain whenever a single service was named. The
+    per-service verbs must act exactly on what the user asked for.
+    """
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "restart", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "restart"
+    assert "api" in last
+    assert "db" not in last  # dep must NOT be pulled in by closure
+
+
+def test_restart_without_args_still_targets_full_workspace(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli restart`` (no names) keeps the closure-expanded plan."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "restart"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "restart"
+    assert "api" in last
+    assert "db" in last
+
+
+def test_stop_named_service_skips_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli stop api`` stops only ``api`` — ``db`` stays running."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "stop", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "stop"
+    assert "api" in last
+    assert "db" not in last
+
+
+def test_down_named_service_skips_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli down api`` removes only ``api`` — ``db`` is not collateral damage."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "down", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "down"
+    assert "api" in last
+    assert "db" not in last
+
+
+def test_build_named_service_skips_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli build api`` builds only ``api`` — deps' images are not rebuilt."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "build", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "build"
+    assert "api" in last
+    assert "db" not in last
+
+
+def test_pull_named_service_skips_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli pull api`` pulls only ``api`` — deps' images are not re-pulled."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "pull", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "pull"
+    assert "api" in last
+    assert "db" not in last
+
+
+def test_up_named_service_still_starts_dep_closure(
+    runner: CliRunner,
+    tmp_path: Path,
+    isolated_registry: Path,
+    captured_argv: list[list[str]],
+) -> None:
+    """``cupli up api`` keeps the closure-expanded plan — deps must come up first."""
+    _ = isolated_registry
+    space = _space_with_deps(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "up", "-d", "api"])
+    assert result.exit_code == 0, result.stdout
+    last = captured_argv[-1]
+    assert last[0] == "up"
+    assert "api" in last
+    assert "db" in last  # dep IS pulled into the up plan
+
+
 def test_ps_emits_ps_argv(
     runner: CliRunner,
     tmp_path: Path,

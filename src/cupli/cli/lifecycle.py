@@ -16,7 +16,7 @@ from cupli.cli.workspace import _resolve_space_path, _strict_vars
 from cupli.core.loader import load_space
 from cupli.domain.enums import DepMode
 from cupli.domain.errors import CupliError
-from cupli.services.compose_service import invoke, make_plan
+from cupli.services.compose_service import invoke, make_plan, target_services
 from cupli.utils.exceptions import suppress_known_exceptions
 
 
@@ -41,6 +41,27 @@ def _compose_passthrough(ctx: typer.Context, services: list[str] | None) -> tupl
     flags = [token for token in tokens if token.startswith("-")]
     names = [token for token in tokens if not token.startswith("-")]
     return flags, names
+
+
+def _verb_services(resolved, plan, names: list[str]) -> list[str]:
+    """Pick the compose services a per-service verb should act on.
+
+    ``cupli up`` wants the closure-expanded plan (deps must be started first),
+    so ``up`` calls ``plan.services`` directly. Per-service verbs (``restart``,
+    ``stop``, ``down``, ``ps``, ``build``, ``pull``) should act exactly on what
+    the user named; closure-expansion would silently pull in transitive deps
+    and surprise the user — ``cupli restart api`` would also restart every
+    database the app depends on.
+
+    With explicit ``names``, resolve them via :func:`target_services` (app
+    names expand to all their managed compose services, but deps stay
+    untouched). With no names, fall back to ``plan.services`` so workspace-
+    wide (``cupli restart``) and tag-filtered (``cupli restart --tag api``)
+    forms still work.
+    """
+    if names:
+        return list(target_services(resolved, names))
+    return list(plan.services)
 
 
 def _parse_mode(raw: str | None) -> DepMode | None:
@@ -99,10 +120,14 @@ def stop_command(
         typer.Option("--tag", help="Tag filter.", autocompletion=complete_tag_names),
     ] = None,
 ) -> None:
-    """Stop services (containers remain on disk)."""
+    """Stop services (containers remain on disk).
+
+    Named services stop only the named containers — dependencies stay up.
+    Omit arguments to stop the whole workspace.
+    """
     flags, names = _compose_passthrough(ctx, services)
-    _, plan = _plan(ctx, names, tag or [])
-    invoke(plan, ["stop", *flags, *plan.services])
+    resolved, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["stop", *flags, *_verb_services(resolved, plan, names)])
 
 
 @suppress_known_exceptions
@@ -118,14 +143,20 @@ def restart_command(
     ] = None,
     hard: Annotated[bool, typer.Option("--hard", help="Down + up -d (recreate containers).")] = False,
 ) -> None:
-    """Restart services (``--hard`` recreates containers)."""
+    """Restart services (``--hard`` recreates containers).
+
+    Named services restart only those containers — dependencies stay up.
+    ``--hard`` keeps the closure-expanded ``up`` so any deps that happen to be
+    down come back; it tears the named services down and brings them up again.
+    """
     flags, names = _compose_passthrough(ctx, services)
-    _, plan = _plan(ctx, names, tag or [])
+    resolved, plan = _plan(ctx, names, tag or [])
+    targets = _verb_services(resolved, plan, names)
     if hard:
-        invoke(plan, ["down", "--remove-orphans"])
+        invoke(plan, ["down", "--remove-orphans", *targets])
         invoke(plan, ["up", "-d", *flags, *plan.services])
         return
-    invoke(plan, ["restart", *flags, *plan.services])
+    invoke(plan, ["restart", *flags, *targets])
 
 
 @suppress_known_exceptions
@@ -153,9 +184,9 @@ def down_command(
         args.extend(["--rmi", "local"])
     args.extend(flags)
     if names:
-        # Named services → resolve through the plan and forward only them.
-        _, plan = _plan(ctx, names, [])
-        args.extend(plan.services)
+        # Named services → only those containers go down; deps stay up.
+        resolved, plan = _plan(ctx, names, [])
+        args.extend(_verb_services(resolved, plan, names))
     else:
         # No services → workspace-level down (default).
         _, plan = _plan(ctx, [], [])
@@ -170,10 +201,10 @@ def ps_command(
         typer.Option("--tag", help="Tag filter.", autocompletion=complete_tag_names),
     ] = None,
 ) -> None:
-    """Show running services."""
+    """Show running services. Named services scope the listing to those only."""
     flags, names = _compose_passthrough(ctx, None)
-    _, plan = _plan(ctx, names, tag or [])
-    invoke(plan, ["ps", *flags, *plan.services])
+    resolved, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["ps", *flags, *_verb_services(resolved, plan, names)])
 
 
 @suppress_known_exceptions
@@ -211,16 +242,16 @@ def build_command(
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Disable build cache.")] = False,
     pull: Annotated[bool, typer.Option("--pull", help="Pull base images first.")] = False,
 ) -> None:
-    """Build service images."""
+    """Build service images. Named services build only those — deps are not rebuilt."""
     flags, names = _compose_passthrough(ctx, services)
-    _, plan = _plan(ctx, names, tag or [])
+    resolved, plan = _plan(ctx, names, tag or [])
     args = ["build"]
     if no_cache:
         args.append("--no-cache")
     if pull:
         args.append("--pull")
     args.extend(flags)
-    args.extend(plan.services)
+    args.extend(_verb_services(resolved, plan, names))
     invoke(plan, args)
 
 
@@ -236,10 +267,10 @@ def pull_command(
         typer.Option("--tag", help="Tag filter.", autocompletion=complete_tag_names),
     ] = None,
 ) -> None:
-    """Pull service images."""
+    """Pull service images. Named services pull only those — deps' images are not re-pulled."""
     flags, names = _compose_passthrough(ctx, services)
-    _, plan = _plan(ctx, names, tag or [])
-    invoke(plan, ["pull", *flags, *plan.services])
+    resolved, plan = _plan(ctx, names, tag or [])
+    invoke(plan, ["pull", *flags, *_verb_services(resolved, plan, names)])
 
 
 @suppress_known_exceptions
