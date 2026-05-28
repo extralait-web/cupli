@@ -1,3 +1,28 @@
+# v0.5.3
+
+Patch release.
+
+## Fixes
+
+* **Per-service lifecycle verbs no longer drag every dependency along.**
+  ``cupli restart api`` restarted ``api`` *and* every container the app
+  depends on (``postgres``, ``redis``, ``minio``, …) — bouncing the whole
+  stack. Same shape for ``cupli stop``, ``cupli down``, ``cupli ps``,
+  ``cupli build``, and ``cupli pull``. Root cause: these verbs forwarded
+  the closure-expanded ``plan.services`` to docker compose, but
+  ``filter_service.closure`` always walks ``apps[*].deps`` transitively.
+  Closure expansion is intended for ``cupli up`` (deps must start
+  first), not for operations on already-running containers.
+  Per-service verbs now resolve user-named seeds via the new
+  ``compose_service.target_services`` helper which skips the deps walk;
+  ``docker compose <verb> <svc>`` already handles per-verb semantics
+  correctly. Workspace-wide forms (``cupli restart`` without arguments)
+  and tag-filtered forms (``cupli restart --tag api``) keep their
+  existing behaviour. ``cupli up`` retains closure expansion. The
+  v0.5.2 audit caught the silent-drop side of ``cupli down`` but missed
+  this broader closure-expansion issue across the verb family — both
+  bug classes are addressed now.
+
 # v0.5.2
 
 Patch release.
