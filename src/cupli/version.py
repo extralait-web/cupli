@@ -8,7 +8,7 @@ __all__ = "VERSION", "version_info"
 
 from .utils import git
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 
 
 def version_info() -> str:

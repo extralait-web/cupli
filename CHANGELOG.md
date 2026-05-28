@@ -1,3 +1,44 @@
+# v0.5.0
+
+Feature release: compose-style start conditions for `apps[*].deps`.
+
+## Features
+
+* **Compose start conditions on `deps`.** A dependency in
+  ``apps[*].deps`` can now declare its docker-compose start condition
+  (``service_started`` / ``service_healthy`` /
+  ``service_completed_successfully``) plus the ``restart`` and ``required``
+  flags. Previously cupli always rendered ``service_started`` (with a special
+  case to ``service_completed_successfully`` for ``mode: oneshot`` deps),
+  which forced workspaces to ship ``wait-for-pg`` scripts to actually wait for
+  a healthy database. Now:
+
+  ```yaml
+  apps:
+    core-back:
+      deps:
+        postgres: service_healthy       # condition shorthand
+        redis: ~                         # default (service_started)
+        migrate:                         # full DepSpec form
+          condition: service_completed_successfully
+          modes: [default]
+          restart: true
+          required: true
+  ```
+
+  Accepted ``deps`` value forms (back-compat preserved):
+
+  - list of names → defaults (unchanged);
+  - ``~`` (null) → defaults;
+  - string → condition shorthand;
+  - list of mode tags → ``modes`` for ``--mode`` filtering (unchanged);
+  - mapping → full ``DepSpec`` (``modes`` / ``condition`` / ``restart`` /
+    ``required``).
+
+  Mode-tag and condition name spaces are disjoint, so a bare string is
+  unambiguous. Cupli forwards ``restart`` / ``required`` to compose only when
+  they differ from compose defaults.
+
 # v0.4.2
 
 Patch release.
