@@ -53,6 +53,26 @@ def test_list_flag(runner: CliRunner) -> None:
     assert "explain" in result.stdout
 
 
+def test_click_group_commands_duck_typing() -> None:
+    """The group-commands helper accepts any object exposing a ``commands`` dict.
+
+    typer ≥0.25 / click ≥8.4 changed the class hierarchy so ``TyperGroup`` no
+    longer ``isinstance(_, click.Group)``; the helper must duck-type to keep
+    ``cupli --list`` working on both lines.
+    """
+    from cupli.cli.root import _click_group_commands
+
+    class _GroupLike:
+        commands: dict[str, object] = {"up": object(), "down": object()}
+
+    class _NotGroup:
+        not_commands = {}
+
+    assert _click_group_commands(_GroupLike()) == {"up": _GroupLike.commands["up"], "down": _GroupLike.commands["down"]}
+    assert _click_group_commands(_NotGroup()) is None
+    assert _click_group_commands(object()) is None
+
+
 def test_explain_known_code(runner: CliRunner) -> None:
     """``cupli explain E001`` prints the catalog entry."""
     result = runner.invoke(app, ["explain", "E001"])

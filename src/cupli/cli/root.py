@@ -177,22 +177,36 @@ def _resolve_log_level(*, verbose: bool, quiet: bool) -> LogLevel:
 
 def _list_commands() -> None:
     """Render the registered commands as a rich table."""
-    import click
     from rich.table import Table
 
     table = Table(title="Cupli commands", show_lines=False, expand=False)
     table.add_column("command", style="cyan", no_wrap=True)
     table.add_column("description", style="white")
 
-    click_command = typer.main.get_command(app)
-    if not isinstance(click_command, click.Group):
+    commands = _click_group_commands(typer.main.get_command(app))
+    if commands is None:
         return
-    for name in sorted(click_command.commands):
-        sub = click_command.commands[name]
+    for name in sorted(commands):
+        sub = commands[name]
         if getattr(sub, "hidden", False):
             continue
         table.add_row(name, sub.help or "")
     console.print(table)
+
+
+def _click_group_commands(obj: object) -> dict[str, Any] | None:
+    """Return ``obj.commands`` when it walks like a click ``Group``.
+
+    Older typer (≤0.21) had ``TyperGroup`` subclass ``click.Group`` and the
+    code used ``isinstance(obj, click.Group)`` for the guard. Newer typer
+    (≥0.25) and click (≥8.4) restructured the class hierarchy — ``isinstance``
+    now returns ``False`` even though the object exposes a ``commands`` mapping.
+    Duck-typing here keeps cupli compatible with both lines.
+    """
+    commands = getattr(obj, "commands", None)
+    if isinstance(commands, dict):
+        return commands
+    return None
 
 
 def _print_all_codes() -> None:
@@ -429,12 +443,8 @@ def _register_shortcuts() -> None:
 
 def _builtin_command_names() -> set[str]:
     """Return the set of command names already registered on the root app."""
-    import click
-
-    click_command = typer.main.get_command(app)
-    if isinstance(click_command, click.Group):
-        return set(click_command.commands)
-    return set()
+    commands = _click_group_commands(typer.main.get_command(app))
+    return set(commands) if commands else set()
 
 
 def _safe_wire(
