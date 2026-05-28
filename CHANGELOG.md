@@ -1,3 +1,19 @@
+# v0.4.2
+
+Patch release.
+
+## Fixes
+
+* **File-placeholder for sub-binds is read-only on the host.** Cupli pre-creates
+  a 0-byte file on the host for every sub-bind whose source is a single file
+  (e.g. ``mkdocs.yml`` mounted at ``/app/mkdocs.yml``). The placeholder is just
+  a mount point — docker overlays the bind source on top inside the container,
+  and the host file stays empty by design. To stop IDEs and humans from editing
+  that empty file by mistake, the placeholder is now created with ``chmod
+  0o444``. Docker mount ignores host perms, so the running container is
+  unaffected. Directory placeholders keep their default perms (some are
+  parents to other sub-bind placeholders and need write perm during prep).
+
 # v0.4.1
 
 Patch release.
