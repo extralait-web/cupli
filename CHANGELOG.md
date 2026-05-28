@@ -1,3 +1,20 @@
+# v0.5.2
+
+Patch release.
+
+## Fixes
+
+* **``cupli down <service>`` no longer silently tears the whole stack down.**
+  ``down_command`` discarded the service-name half of the passthrough split,
+  so ``cupli down kanchi`` ran a full ``docker compose down --remove-orphans``
+  and removed every container in the workspace. ``down`` now declares an
+  optional ``services`` positional: with services named, only those
+  containers go down (``docker compose down [SERVICES…]`` — compose v2
+  supports the per-service form); without arguments the workspace-wide
+  teardown behaviour is unchanged. The other lifecycle verbs (``up``,
+  ``stop``, ``restart``, ``ps``, ``logs``, ``build``, ``pull``) were audited
+  at the same time and already forward service names correctly.
+
 # v0.5.1
 
 Patch release.
