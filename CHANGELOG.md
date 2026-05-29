@@ -1,3 +1,14 @@
+# v0.7.0
+
+Hygiene release. Fixture and example services renamed to project-neutral
+names; no functional changes vs v0.6.3.
+
+## Chores
+
+* Renamed fixture/example services across README (EN + RU), full-reference
+  example, tests, and one docstring to project-neutral identifiers
+  (`cache-redis`, `api-backend`).
+
 # v0.6.3
 
 Patch release. Two fixes from a fresh-clone deploy of the `exports` /
