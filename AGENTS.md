@@ -153,7 +153,7 @@ already match.
 ```yaml
 apps:
   redis:
-    service: agora-redis          # compose service is named differently
+    service: infra-redis          # compose service is named differently
     composes: [ ./compose.yml ]
 ```
 
@@ -273,15 +273,15 @@ a full ``DepSpec`` mapping:
 
 ```yaml
 apps:
-  core-back:
+  api:
     deps:
       postgres: service_healthy            # wait for compose healthcheck to pass
       redis: ~                              # default: service_started
-      mailcatcher: ~
-      minio: service_healthy
+      mail: ~
+      object-store: service_healthy
       init-data:
         condition: service_completed_successfully   # init container must exit cleanly
-        restart: true                       # restart `core-back` when init-data restarts
+        restart: true                       # restart `api` when init-data restarts
         required: true                      # default; set false for a soft dep
 ```
 
@@ -400,14 +400,15 @@ separate compose file:
 
 ```yaml
 volumes:
-  minio_data:                    # null body == default-driver named volume
+  db_data:                       # null body == default-driver named volume
 
 apps:
-  minio:
+  db:
     service:
-      image: minio/minio
-      command: server /data
-      volumes: [ minio_data:/data ]   # references the named volume above
+      image: postgres:16
+      environment:
+        POSTGRES_PASSWORD: ${DB_PASSWORD}
+      volumes: [ db_data:/var/lib/postgresql/data ]   # references the named volume above
 ```
 
 ---
@@ -523,6 +524,17 @@ E002 Validation failed
 * **`cupli up <name>` accepts both app names and individual compose-service
   names from compound apps.** Targeting `cupli up celery-worker` starts
   only that one service (without firing up `celery-beat` and `backend`).
+* **Per-service verbs do NOT pull in `apps[*].deps`.** `cupli restart api`,
+  `stop`, `down`, `ps`, `build`, `pull` act exactly on what was named — the
+  databases / queues / caches the app depends on stay as they are. Only
+  `cupli up` walks the closure (deps must be started first). The
+  workspace-wide forms (`cupli restart` / `cupli stop` / `cupli down` with
+  no arguments) and tag-filtered forms (`--tag api`) still operate on the
+  whole selected set. So:
+  - `cupli restart api` → bounces only `api`.
+  - `cupli restart` → bounces every service in the workspace.
+  - `cupli down api` → removes only the `api` container.
+  - `cupli down` (no args) → removes every container the workspace owns.
 * **`cupli up --mode <m>` filters cross-app deps.** Without it, deps
   inclusion follows the universe (all active apps). With a mode, only
   deps whose mode-list contains `<m>` are walked.
@@ -533,7 +545,7 @@ E002 Validation failed
 
 * `space.cupli.yaml` at repo root — full reference with comments on
   every key.
-* `examples/{minimal,celery,multi-repo-shop,full-reference}/` — worked
+* `docs/examples/{minimal,celery,multi-repo-shop,full-reference}/` — worked
   examples by complexity.
 * `README.md` / `README.ru.md` — user-facing docs.
 * `cupli --list` — every CLI command grouped by area.
