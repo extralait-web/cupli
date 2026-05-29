@@ -66,6 +66,40 @@ def test_service_image_returns_first_match() -> None:
     assert es.service_image(_CONFIG, {"web"}) == "demo-web:latest"
 
 
+def test_export_source_scoped_to_owning_app_image(tmp_path: Path) -> None:
+    """The seed/sync source resolves to the FROM app's image, not another app's (H1)."""
+    from cupli.core.loader import load_space
+
+    space_file = tmp_path / "space.cupli.yaml"
+    space_file.write_text(
+        "name: demo\n"
+        "apps:\n"
+        "  api: {}\n"  # python app — comes first in the compose config
+        "  web: {}\n"
+        "exports:\n"
+        "  web-nm:\n"
+        "    from: web\n"
+        "    exec_path: /app/node_modules\n"
+        "    path: ${WEB_APP_PATH}/node_modules\n",
+        encoding="utf-8",
+    )
+    resolved = load_space(space_file, auto_register=False, auto_cache=False)
+    config = {
+        "services": {
+            "api": {"image": "demo-api:dev"},  # would win a naive all-services scan
+            "web": {
+                "image": "demo-web:dev",
+                "volumes": [{"type": "volume", "source": "nm", "target": "/app/node_modules"}],
+            },
+        },
+        "volumes": {"nm": {"name": "demo_nm"}},
+    }
+    services = es._owning_services(resolved, "web")
+    assert services == {"web"}
+    assert es.service_image(config, services) == "demo-web:dev"
+    assert es.volume_for_exec_path(config, services, "/app/node_modules") == "demo_nm"
+
+
 # --- listing / status ------------------------------------------------------
 
 

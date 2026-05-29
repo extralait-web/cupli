@@ -55,15 +55,22 @@ def test_up_includes_detach_and_build_flags(
     isolated_registry: Path,
     captured_argv: list[list[str]],
 ) -> None:
-    """``cupli up -d --build`` propagates ``-d``, ``--build``, and ``--pull``."""
+    """``cupli up -d --build`` builds first (separate step), then ``up`` with ``-d`` / ``--pull``.
+
+    ``--build`` is no longer forwarded to ``up``: cupli runs an explicit
+    ``build`` first so bind-seed / shared-volume prep see a real image, then
+    ``up`` without ``--build``.
+    """
     _ = isolated_registry
     space = _space(tmp_path)
     result = runner.invoke(app, ["-f", str(space), "up", "-d", "--build"])
     assert result.exit_code == 0, result.stdout
+    verbs = [argv[0] for argv in captured_argv]
+    assert "build" in verbs  # build runs as its own step
     last = captured_argv[-1]
     assert last[0] == "up"
     assert "-d" in last
-    assert "--build" in last
+    assert "--build" not in last  # not forwarded to up anymore
     assert "--pull" in last
     assert "missing" in last
     assert "api" in last

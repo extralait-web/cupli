@@ -13,6 +13,7 @@ from cupli.services.compose_service import (
     build_argv,
     make_plan,
     render_overrides,
+    shared_volume_inits,
     write_env_file,
 )
 
@@ -920,3 +921,28 @@ def test_build_env_exposes_compose_state(tmp_path: Path) -> None:
     assert any("docker-compose.pre.yml" in path for path in files)
     assert any("docker-compose.post.yml" in path for path in files)
     assert any("docker-compose.yml" in path for path in files)
+
+
+def test_shared_volume_inits_detects_volume_shared_by_multiple_services() -> None:
+    """A named volume mounted by >=2 services is returned for one-shot init (H2)."""
+    config = {
+        "services": {
+            "web": {"image": "img:dev", "volumes": [{"type": "volume", "source": "venv", "target": "/app/.venv"}]},
+            "worker": {"image": "img:dev", "volumes": [{"type": "volume", "source": "venv", "target": "/app/.venv"}]},
+            "beat": {"image": "img:dev", "volumes": [{"type": "volume", "source": "venv", "target": "/app/.venv"}]},
+            "solo": {"image": "img:dev", "volumes": [{"type": "volume", "source": "cache", "target": "/cache"}]},
+        },
+        "volumes": {"venv": {"name": "demo_venv"}, "cache": {"name": "demo_cache"}},
+    }
+    inits = shared_volume_inits(config)
+    assert inits == [("demo_venv", "/app/.venv", "img:dev")]  # `cache` (1 service) excluded
+
+
+def test_shared_volume_inits_empty_for_no_sharing() -> None:
+    """No shared named volume → nothing to pre-initialise."""
+    config = {
+        "services": {"web": {"image": "i", "volumes": [{"type": "volume", "source": "v", "target": "/x"}]}},
+        "volumes": {"v": {"name": "demo_v"}},
+    }
+    assert shared_volume_inits(config) == []
+    assert shared_volume_inits(None) == []

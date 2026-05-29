@@ -824,6 +824,63 @@ def resolved_compose_config(plan: CompiledPlan) -> dict | None:
     return config if isinstance(config, dict) else None
 
 
+def shared_volume_inits(config: dict | None) -> list[tuple[str, str, str]]:
+    """Return ``(real_volume, mountpoint, image)`` for named volumes shared by ≥2 services.
+
+    A fresh named volume is initialised from image content on first mount; when
+    several services of an app mount the SAME fresh volume, ``docker compose up``
+    races their concurrent inits (``failed to mkdir …/_data/…: file exists``).
+    Pre-initialising each such volume once, serially, side-steps the race.
+    """
+    if config is None:
+        return []
+    services = config.get("services") or {}
+    top = config.get("volumes") or {}
+    by_volume: dict[str, dict[str, tuple[str, str]]] = {}
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict) or not svc.get("image"):
+            continue
+        for vol in svc.get("volumes") or []:
+            if not (isinstance(vol, dict) and vol.get("type") == "volume" and vol.get("source") and vol.get("target")):
+                continue
+            real = str((top.get(str(vol["source"])) or {}).get("name", vol["source"]))
+            by_volume.setdefault(real, {})[svc_name] = (str(vol["target"]), str(svc["image"]))
+    out: list[tuple[str, str, str]] = []
+    for real, per_service in by_volume.items():
+        if len(per_service) >= 2:
+            target, image = next(iter(per_service.values()))
+            out.append((real, target, image))
+    return out
+
+
+def prepare_shared_volumes(config: dict | None) -> None:
+    """Initialise each not-yet-created shared named volume once (serially).
+
+    No-op for volumes that already exist (the race only bites fresh volumes) and
+    best-effort throughout — never blocks ``up`` on a prep failure.
+    """
+    for real, target, image in shared_volume_inits(config):
+        inspect = run_command(["docker", "volume", "inspect", real], stream=False, check=False)
+        if inspect.returncode == 0:
+            continue  # already initialised — concurrent mounts won't race
+        run_command(["docker", "run", "--rm", "-v", f"{real}:{target}", image, "true"], stream=False, check=False)
+
+
+def ensure_images(plan: CompiledPlan, service_images: dict[str, str]) -> None:
+    """Build any service whose image is not present locally (``docker compose build``).
+
+    Used before bind-seed copy and shared-volume init so those steps read content
+    from a real image on a fresh deploy (where the image is not built yet).
+    """
+    missing = [
+        svc
+        for svc, image in service_images.items()
+        if run_command(["docker", "image", "inspect", image], stream=False, check=False).returncode != 0
+    ]
+    if missing:
+        invoke(plan, ["build", *sorted(missing)])
+
+
 _MOUNT_PREP_VERBS: frozenset[str] = frozenset({"up", "build", "run", "watch"})
 """Compose verbs that materialise mounts and benefit from pre-created targets."""
 
@@ -861,10 +918,13 @@ __all__ = (
     "CompiledPlan",
     "build_argv",
     "build_env",
+    "ensure_images",
     "invoke",
     "make_plan",
+    "prepare_shared_volumes",
     "render_overrides",
     "resolved_compose_config",
+    "shared_volume_inits",
     "target_services",
     "write_env_file",
 )

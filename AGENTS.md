@@ -375,8 +375,15 @@ exports:
   I/O and copies it to the host one-way on each `refresh_on` event. Symlinks
   are preserved, so pnpm's `.pnpm` / `@scope/<lib>` structure survives.
 - **`bind-seeded`** — turns `exec_path` into a host bind (injected into the
-  generated post-override) seeded from the image, so the container writes
-  straight to the host (always live).
+  generated post-override) seeded **offline from the image** (`docker cp`-style
+  copy of `exec_path`, NOT a runtime `pnpm/uv install`), so the container writes
+  straight to the host (always live). On a fresh `cupli up` the image is built
+  first, so the seed copies real content rather than starting with an empty
+  bind. Re-seeded from the new image on `refresh_on: [build]`.
+- **Fresh `up` is race-safe:** before starting, cupli builds (when `--build` or
+  an image needed below is missing), pre-initialises any named volume shared by
+  ≥2 services of an app (one-shot, serial — avoids docker's concurrent
+  volume-init race), then seeds bind-seeded exports.
 - Lifecycle: seeded/refreshed automatically after `up` / `build` / `restart`
   per `refresh_on`; manually via `cupli exports sync [names…]`. Inspect with
   `cupli exports list` (`missing`/`stale`/`seeded`/`synced`); remove a `sync`

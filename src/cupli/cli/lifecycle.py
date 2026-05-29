@@ -64,11 +64,11 @@ def _verb_services(resolved, plan, names: list[str]) -> list[str]:
     return list(plan.services)
 
 
-def _host_pre_up(resolved, plan) -> None:
-    """Seed bind-seeded exports before ``up`` (no-op without exports)."""
-    from cupli.services.host_sync import pre_up
+def _host_prepare_up(resolved, plan) -> None:
+    """Build-if-missing, init shared volumes, seed bind-seeded before ``up`` (no-op when N/A)."""
+    from cupli.services.host_sync import prepare_up
 
-    pre_up(resolved, plan)
+    prepare_up(resolved, plan)
 
 
 def _host_post(resolved, plan, event: str, service_names: list[str]) -> None:
@@ -111,12 +111,15 @@ def up_command(
     """Bring services up (``docker compose up``). Unknown flags pass through."""
     flags, names = _compose_passthrough(ctx, services)
     resolved, plan = _plan(ctx, names, tag or [], _parse_mode(mode))
-    _host_pre_up(resolved, plan)
+    if build:
+        # Build BEFORE prep + up so bind-seed copy and shared-volume init read a
+        # real image (a fresh `up --build` would otherwise build only inside the
+        # concurrent up, after prep). The up below then runs without --build.
+        invoke(plan, ["build", *plan.services])
+    _host_prepare_up(resolved, plan)
     args = ["up"]
     if detach:
         args.append("-d")
-    if build:
-        args.append("--build")
     args.extend(["--pull", pull])
     args.extend(flags)
     args.extend(plan.services)
@@ -170,7 +173,7 @@ def restart_command(
     targets = _verb_services(resolved, plan, names)
     if hard:
         invoke(plan, ["down", "--remove-orphans", *targets])
-        _host_pre_up(resolved, plan)
+        _host_prepare_up(resolved, plan)
         invoke(plan, ["up", "-d", *flags, *plan.services])
         _host_post(resolved, plan, "restart", targets)
         return

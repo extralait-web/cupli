@@ -156,10 +156,11 @@ def _sync_one(resolved: ResolvedSpace, name: str, config: dict | None, state: di
     _guard_foreign_path(name, path, state)
     if export.gitignore:
         ensure_gitignore(resolved.space_dir, [path])
+    services = _owning_services(resolved, export.from_app)
     if export.strategy is ExportStrategy.BIND_SEEDED:
-        status = _seed_bind(name, export.from_app, exec_path, path, config)
+        status = _seed_bind(name, services, exec_path, path, config)
     else:
-        status = _sync_volume(name, export.from_app, exec_path, path, config)
+        status = _sync_volume(name, services, exec_path, path, config)
     if export.rewrite_paths and status in {"synced", "seeded"}:
         _rewrite_container_paths(resolved, export.from_app, exec_path, path, config)
     state.setdefault(name, {}).update({"status": status, "path": str(path), "strategy": export.strategy.value})
@@ -302,22 +303,21 @@ def _gitignore_entry(space_dir: Path, path: Path) -> str:
 # --- docker materialisation ------------------------------------------------
 
 
-def _seed_bind(name: str, from_app: str, exec_path: str, host_path: Path, config: dict | None) -> str:
+def _seed_bind(name: str, services: set[str], exec_path: str, host_path: Path, config: dict | None) -> str:
     """Seed ``host_path`` from the service image when empty (bind-seeded strategy)."""
     if _is_populated(host_path):
         return "seeded"
-    image = service_image(config, _service_names(from_app, config))
+    image = service_image(config, services)
     if image is None:
-        warn(f"export {name!r}: cannot seed — service image for {from_app!r} not resolved (is docker available?)")
+        warn(f"export {name!r}: cannot seed — service image not resolved (is docker available / image built?)")
         return "missing"
     create_dir(host_path)
     ok = _docker_seed(image, exec_path, host_path)
     return _verify_materialised(name, host_path, ok, "seeded")
 
 
-def _sync_volume(name: str, from_app: str, exec_path: str, host_path: Path, config: dict | None) -> str:
+def _sync_volume(name: str, services: set[str], exec_path: str, host_path: Path, config: dict | None) -> str:
     """Copy the named volume backing ``exec_path`` to ``host_path`` (sync strategy)."""
-    services = _service_names(from_app, config)
     volume = volume_for_exec_path(config, services, exec_path)
     image = service_image(config, services)
     if volume is None or image is None:
@@ -419,7 +419,7 @@ def _container_workdir(resolved: ResolvedSpace, from_app: str, exec_path: str, c
     if config is None or from_app not in resolved.apps:
         return None
     host_root = os.path.abspath(str(resolved.apps[from_app].path))
-    services = set(_managed_services(resolved, from_app)) | set(config.get("services") or {})
+    services = set(_managed_services(resolved, from_app))
     for source, target in binds_for_services(config, services):
         if os.path.abspath(source) == host_root and exec_path.startswith(target.rstrip("/") + "/"):
             return target
@@ -443,16 +443,19 @@ def _is_populated(path: Path) -> bool:
     return True
 
 
-def _service_names(from_app: str, config: dict | None) -> set[str]:
-    """Service names that ``from_app`` may map to in the compose config.
+def _owning_services(resolved: ResolvedSpace, from_app: str) -> set[str]:
+    """Compose service names the export's ``from`` app owns.
 
-    Prefers the app name itself, but also returns every service present in the
-    config so a renamed compose service still resolves.
+    Scoped to the app's managed services — NOT every service in the merged
+    compose. Unioning all services let an unrelated app's image win when
+    resolving the source image (e.g. a Python ``core-back`` image used to seed a
+    JS ``node_modules`` export), copying the wrong content.
     """
-    names = {from_app}
-    if config:
-        names |= set((config.get("services") or {}).keys())
-    return names
+    from cupli.services.compose_service import _managed_services
+
+    if from_app not in resolved.apps:
+        return {from_app}
+    return set(_managed_services(resolved, from_app))
 
 
 def _fetch_config(resolved: ResolvedSpace, export_names: list[str]) -> dict | None:

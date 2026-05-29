@@ -33,10 +33,77 @@ def applicable(resolved: ResolvedSpace) -> bool:
     return any(mount.bridge_enabled for mount in resolved.space.mounts.values())
 
 
-def pre_up(resolved: ResolvedSpace, plan: CompiledPlan) -> None:
-    """Seed every ``bind-seeded`` export of the planned apps before ``up``."""
-    if not resolved.space.exports:
+def prepare_up(resolved: ResolvedSpace, plan: CompiledPlan) -> None:
+    """Prepare the host + docker state before ``up`` so a fresh deploy is clean.
+
+    Three steps, all gated by :func:`_needs_prepare` (zero cost otherwise) and
+    best-effort (never block ``up``):
+
+    1. Build any image needed below that is missing — so a fresh deploy seeds /
+       initialises from a real image rather than an empty bind / volume.
+    2. Initialise shared named volumes once, serially (avoids the concurrent
+       ``up`` init race when several services share one fresh volume).
+    3. Seed ``bind-seeded`` exports from the (now-present) image, so the
+       container starts with a populated host bind instead of running a slow,
+       network-bound package install at runtime.
+    """
+    if not _needs_prepare(resolved):
         return
+    from cupli.services.compose_service import ensure_images, prepare_shared_volumes, resolved_compose_config
+
+    config = resolved_compose_config(plan)
+    if config is None:
+        return
+    ensure_images(plan, _images_for_prep(resolved, config))
+    prepare_shared_volumes(config)
+    _seed_bind_exports(resolved, plan, config)
+
+
+def _needs_prepare(resolved: ResolvedSpace) -> bool:
+    """True when a space needs pre-``up`` prep: bind-seeded exports or a compound app."""
+    from cupli.domain.enums import ExportStrategy
+    from cupli.services.compose_service import _managed_services
+
+    if any(export.strategy is ExportStrategy.BIND_SEEDED for export in resolved.space.exports.values()):
+        return True
+    # A compound app (≥2 compose services) may share a named volume → H2 race risk.
+    return any(len(_managed_services(resolved, app)) >= 2 for app in resolved.space.apps)
+
+
+def _images_for_prep(resolved: ResolvedSpace, config: dict) -> dict[str, str]:
+    """Map ``service -> image`` for services that prep needs an image present for.
+
+    Covers services sharing a named volume (volume init) and the owning services
+    of bind-seeded exports with an empty host (seed copy).
+    """
+    from cupli.services.exports_service import _is_populated, _owning_services
+
+    services = config.get("services") or {}
+    top = config.get("volumes") or {}
+    by_volume: dict[str, dict[str, str]] = {}
+    for svc_name, svc in services.items():
+        image = svc.get("image") if isinstance(svc, dict) else None
+        if not image:
+            continue
+        for vol in svc.get("volumes") or []:
+            if isinstance(vol, dict) and vol.get("type") == "volume" and vol.get("source") and vol.get("target"):
+                real = str((top.get(str(vol["source"])) or {}).get("name", vol["source"]))
+                by_volume.setdefault(real, {})[svc_name] = str(image)
+    want: dict[str, str] = {}
+    for per_service in by_volume.values():
+        if len(per_service) >= 2:
+            want.update(per_service)
+    for name, export in resolved.space.exports.items():
+        if export.strategy is ExportStrategy.BIND_SEEDED and not _is_populated(resolved.exports[name].path):
+            for svc in _owning_services(resolved, export.from_app):
+                image = (services.get(svc) or {}).get("image")
+                if image:
+                    want[svc] = str(image)
+    return want
+
+
+def _seed_bind_exports(resolved: ResolvedSpace, plan: CompiledPlan, config: dict | None) -> None:
+    """Seed every ``bind-seeded`` export of the planned apps from the image."""
     apps = _target_apps(resolved, plan.services)
     names = [
         name
@@ -45,10 +112,9 @@ def pre_up(resolved: ResolvedSpace, plan: CompiledPlan) -> None:
     ]
     if not names:
         return
-    from cupli.services.compose_service import resolved_compose_config
     from cupli.services.exports_service import sync_exports
 
-    sync_exports(resolved, names, config=resolved_compose_config(plan))
+    sync_exports(resolved, names, config=config)
 
 
 def post_event(resolved: ResolvedSpace, plan: CompiledPlan, event: str, service_names: Sequence[str]) -> None:
@@ -117,4 +183,4 @@ def _target_apps(resolved: ResolvedSpace, service_names: Sequence[str]) -> set[s
     return apps
 
 
-__all__ = ("applicable", "post_event", "pre_up")
+__all__ = ("applicable", "post_event", "prepare_up")
