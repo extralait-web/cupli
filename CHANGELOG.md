@@ -1,3 +1,43 @@
+# v0.6.1
+
+Patch release. Fixes from the first real-world run of the v0.6.0 `exports` /
+`host_bridge` features.
+
+## Fixes
+
+* **`exports sync` produced an empty `root:root` directory and failed chown
+  (`E033`).** The `sync` helper copied as `--user <uid>:<gid>`, which can
+  neither read root-owned named-volume content nor chown the result; the
+  follow-up host-side chown then hit `EPERM`, leaving an empty directory while
+  `exports list` reported `missing`. The copy **and** the chown now run as root
+  *inside* the helper container (`cp -a <src>/. /dst/ && chown -R <uid>:<gid>
+  /dst`), so the source is readable regardless of its in-image ownership and
+  the result is owned by the host user — no host-side chown, no `E033`. `cp -a`
+  preserves the relative symlinks inside `node_modules`; a
+  `find -mindepth 1 -delete` pass makes repeated syncs idempotent. The reported
+  status now reconciles with the on-disk fact (`missing` when nothing
+  materialised, never a false `synced`). `bind-seeded` seeding uses the same
+  root copy+chown path, so it no longer leaves root-owned files either.
+
+* **`cupli mounts bridge` raised a false `E032` on an empty directory.** An
+  empty `packages/<lib>` mount point (routinely left by docker or a prior run)
+  was treated as a foreign object. An empty directory on the link path is now
+  reclaimed (`rmdir` + symlink); only a non-empty directory, a file, or a
+  foreign symlink is a conflict (`E032`).
+
+* **Top-level `${<NAME>_APP_PATH}` ignored an `app.path` override.** In
+  top-level `exports` / `mounts`, `${<NAME>_APP_PATH}` resolved to the default
+  `${APPS_PATH}/<name>` instead of the app's overridden `path:`, so
+  `exports.path` could point at the wrong directory. The loader now overwrites
+  the pre-pass default path-vars with each component's actual resolved path
+  before resolving top-level `mounts` / `exports`.
+
+* **`host_bridge: true` auto-derivation missed the workdir bind from an
+  external `composes:` file** when the compose service name differed from the
+  app name (`no hosting bind found`). Auto-derivation now falls back to scanning
+  every merged-compose service's binds for the one whose target is an ancestor
+  of `exec_path`.
+
 # v0.6.0
 
 Feature release: host-side materialisation for IDEs — `host_bridge` mount
