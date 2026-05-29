@@ -76,6 +76,27 @@ def test_sibling_app_path_var_resolves_in_yaml(tmp_path: Path) -> None:
     assert resolved.apps["celery"].path == backend_default
 
 
+def test_app_path_var_in_export_honours_override(tmp_path: Path) -> None:
+    """``${<NAME>_APP_PATH}`` in top-level ``exports`` reflects an ``app.path`` override (Bug 3a)."""
+    space_file = _write_space(
+        tmp_path / "space.cupli.yaml",
+        (
+            "name: tiny\n"
+            "apps:\n"
+            "  web:\n"
+            "    path: ${SPACE_PATH}/src/custom/web\n"
+            "exports:\n"
+            "  nm:\n"
+            "    from: web\n"
+            "    exec_path: /app/node_modules\n"
+            "    path: ${WEB_APP_PATH}/node_modules\n"
+        ),
+    )
+    resolved = load_space(space_file)
+    expected = (tmp_path / "src/custom/web/node_modules").resolve()
+    assert resolved.exports["nm"].path == expected
+
+
 def test_mount_path_var_resolves_in_yaml(tmp_path: Path) -> None:
     """``${<NAME>_MOUNT_PATH}`` is available to apps and other mounts."""
     space_file = _write_space(

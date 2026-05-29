@@ -340,7 +340,8 @@ mounts:
   `cupli mounts detach`. Run explicitly with `cupli mounts bridge [names…]` /
   `cupli mounts unbridge [names…]`.
 - cupli only touches symlinks it created (tracked in `state/bridges.json`).
-  A foreign non-symlink on the link path is left alone and surfaces as `E032`.
+  An empty directory on the link path (left by docker / a prior run) is
+  reclaimed; a non-empty dir, a file, or a foreign symlink is left alone (`E032`).
 - Auto-derivation reads `docker compose config` for the workdir bind; an
   explicit `link:` works offline and is exposed as `${<MOUNT>_BRIDGE_PATH}`.
 - `cupli mounts list` shows a `bridge` column (`none`/`pending`/`ok`/
@@ -548,7 +549,7 @@ E002 Validation failed
 | `E029` | Space file already exists.             | `cupli init --force` to overwrite.                                                                                                                                                                                        |
 | `E030` | Per-component env-var name collision.  | Rename one of the components (`shop-api` and `shop_api` both → `SHOP_API_APP_PATH`).                                                                                                                                      |
 | `E031` | Planned service not declared anywhere. | Either add it to a compose-fragment listed under `composes:` (and run `cupli space sync` if the repo isn't cloned yet), or supply at least one inline compose field (e.g. `image:`) under `service:` / `services.<name>`. |
-| `E032` | Host path for a bridge/export is occupied by a foreign object. | Move/remove it, or `cupli exports clean` / `cupli mounts unbridge` if cupli made it. cupli never overwrites foreign host objects. |
+| `E032` | Host path for a bridge/export holds a non-empty dir, a file, or a foreign symlink. | Move/remove it, or `cupli exports clean` / `cupli mounts unbridge` if cupli made it. (Empty dirs are reclaimed automatically; cupli never overwrites non-empty/foreign objects.) |
 | `E033` | Could not chown a materialised export to the host user. | Fix permissions on the host path (no root-owned parents from an earlier docker run), then re-sync. |
 | `E034` | Exporting a `.venv`-like path with editable installs (absolute container paths). | Prefer a remote Python interpreter; or set `rewrite_paths: true` (experimental) to export anyway. |
 

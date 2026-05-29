@@ -121,8 +121,8 @@ def test_bridge_repairs_broken_symlink(tmp_path: Path) -> None:
     assert (link.parent / link.readlink()).resolve() == (tmp_path / "src/mounts/ui-lib").resolve()
 
 
-def test_bridge_conflict_on_real_dir_raises_e032(tmp_path: Path) -> None:
-    """A real (non-symlink) directory on the link path is never overwritten."""
+def test_bridge_conflict_on_nonempty_dir_raises_e032(tmp_path: Path) -> None:
+    """A non-empty (non-symlink) directory on the link path is never overwritten."""
     resolved = _load(tmp_path)
     link = tmp_path / "src/apps/web/packages/ui"
     link.mkdir(parents=True)
@@ -131,6 +131,30 @@ def test_bridge_conflict_on_real_dir_raises_e032(tmp_path: Path) -> None:
         bs.bridge_mounts(resolved)
     assert exc.value.code == "E032"
     assert (link / "file.txt").read_text(encoding="utf-8") == "keep me"
+
+
+@needs_symlinks
+def test_bridge_replaces_empty_dir_without_e032(tmp_path: Path) -> None:
+    """An empty directory on the link path is removed and replaced with a symlink (Bug 2)."""
+    resolved = _load(tmp_path)
+    link = tmp_path / "src/apps/web/packages/ui"
+    link.mkdir(parents=True)  # empty mount point left by docker / a prior run
+    results = bs.bridge_mounts(resolved)
+    assert [r.status for r in results] == ["created"]
+    assert link.is_symlink()
+    assert (link.parent / link.readlink()).resolve() == (tmp_path / "src/mounts/ui-lib").resolve()
+
+
+def test_link_status_classifies_empty_vs_conflict(tmp_path: Path) -> None:
+    """``link_status`` distinguishes an empty dir (removable) from a non-empty one."""
+    target = tmp_path / "target"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert bs.link_status(empty, target) == "empty"
+    nonempty = tmp_path / "nonempty"
+    nonempty.mkdir()
+    (nonempty / "f").write_text("x", encoding="utf-8")
+    assert bs.link_status(nonempty, target) == "conflict"
 
 
 @needs_symlinks
@@ -154,6 +178,35 @@ def test_bridge_info_reports_pending_then_ok(tmp_path: Path) -> None:
     assert bs.bridge_info(resolved)["ui"].status == "pending"
     bs.bridge_mounts(resolved)
     assert bs.bridge_info(resolved)["ui"].status == "ok"
+
+
+@needs_symlinks
+def test_bridge_auto_derive_falls_back_to_all_services(tmp_path: Path) -> None:
+    """Auto-derivation finds the workdir bind even under a differently-named service (Bug 3b)."""
+    space_file = tmp_path / "space.cupli.yaml"
+    space_file.write_text(
+        "name: demo\n"
+        "apps:\n"
+        "  web: {}\n"
+        "mounts:\n"
+        "  ui:\n"
+        "    hosted_in: [web]\n"
+        "    path: ${MOUNTS_PATH}/ui-lib\n"
+        "    exec_path: /app/packages/ui\n"
+        "    host_bridge: true\n",  # auto-derive, no explicit link
+        encoding="utf-8",
+    )
+    from cupli.core.loader import load_space
+
+    resolved = load_space(space_file, auto_register=False, auto_cache=False)
+    bind_source = str(tmp_path / "src/apps/web")
+    # The compose service is named `frontend`, not `web` — the guessed name misses it.
+    config = {"services": {"frontend": {"volumes": [{"type": "bind", "source": bind_source, "target": "/app"}]}}}
+    results = bs.bridge_mounts(resolved, config=config)
+    assert [r.status for r in results] == ["created"]
+    link = tmp_path / "src/apps/web/packages/ui"
+    assert link.is_symlink()
+    assert (link.parent / link.readlink()).resolve() == (tmp_path / "src/mounts/ui-lib").resolve()
 
 
 def test_bridge_skipped_when_mount_detached(tmp_path: Path) -> None:

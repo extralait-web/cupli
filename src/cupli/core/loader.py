@@ -161,10 +161,15 @@ def load_space(
     space_vars = {**space_vars, **_default_path_vars(space, space_vars)}
     bases = _resolve_bases(space, space_vars, strict=strict_vars, allow_shadow=allow_shadow)
     apps = _resolve_apps(space, bases, space_vars, strict=strict_vars, allow_shadow=allow_shadow)
+    # Replace the pre-pass default path-vars with each component's ACTUAL resolved
+    # path so top-level `mounts` / `exports` (and host_bridge derivation) honour a
+    # custom `path:` override — e.g. `${WEB_APP_PATH}` in `exports.path` must point
+    # at the app's real directory, not the `${APPS_PATH}/web` default.
+    space_vars = {**space_vars, **_actual_path_vars(("APP", apps), ("BASE", bases))}
     mounts = _resolve_mounts(space, space_vars, strict=strict_vars, allow_shadow=allow_shadow)
-    # Expose explicit host_bridge links as <MOUNT>_BRIDGE_PATH so YAML / commands
+    # Expose resolved mount paths + explicit host_bridge links so YAML / commands
     # may reference them; auto-derived links need docker and stay out of scope.
-    space_vars = {**space_vars, **_bridge_path_vars(space, mounts)}
+    space_vars = {**space_vars, **_actual_path_vars(("MOUNT", mounts)), **_bridge_path_vars(space, mounts)}
     exports = _resolve_exports(space, space_vars, strict=strict_vars, allow_shadow=allow_shadow)
     if auto_register:
         _try_auto_register(space.name, space_path.resolve())
@@ -252,6 +257,21 @@ def _default_path_vars(space: SpaceModel, space_vars: dict[str, str]) -> dict[st
         out[f"{_to_env_ident(name)}_BASE_PATH"] = str(bases_root / name)
     for name in space.mounts:
         out[f"{_to_env_ident(name)}_MOUNT_PATH"] = str(mounts_root / name)
+    return out
+
+
+def _actual_path_vars(*groups: tuple[str, dict[str, ResolvedComponent]]) -> dict[str, str]:
+    """Build ``<NAME>_{APP,BASE,MOUNT}_PATH`` from each component's RESOLVED path.
+
+    Unlike :func:`_default_path_vars` (which emits the pre-resolve default
+    location), this reflects a custom ``path:`` override, so later top-level
+    sections (``mounts`` / ``exports``) and host_bridge derivation see the real
+    on-disk directory.
+    """
+    out: dict[str, str] = {}
+    for suffix, components in groups:
+        for name, comp in components.items():
+            out[f"{_to_env_ident(name)}_{suffix}_PATH"] = str(comp.path)
     return out
 
 

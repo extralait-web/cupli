@@ -104,16 +104,24 @@ def binds_for_services(config: dict, service_names: set[str]) -> list[tuple[str,
 
 
 def link_status(link: Path, target: Path) -> str:
-    """Classify the on-disk state of a bridge symlink: ok/broken/conflict/none."""
+    """Classify the on-disk state of a bridge link: ok/broken/empty/conflict/none.
+
+    ``empty`` is a real, empty directory on the link path — safe to remove and
+    replace with the symlink (docker / prior runs routinely leave empty
+    ``packages/<lib>`` mount points). ``conflict`` is a non-empty directory, a
+    file, or a foreign symlink — never touched.
+    """
     if link.is_symlink():
         try:
             points_to = (link.parent / os.readlink(link)).resolve()
         except OSError:
             return "broken"
         return "ok" if points_to == target.resolve() else "broken"
-    if link.exists():
-        return "conflict"
-    return "none"
+    if not link.exists():
+        return "none"
+    if link.is_dir() and not any(link.iterdir()):
+        return "empty"
+    return "conflict"
 
 
 # --- bridge / unbridge -----------------------------------------------------
@@ -187,7 +195,7 @@ def bridge_info(resolved: ResolvedSpace) -> dict[str, BridgeInfo]:
             info[name] = BridgeInfo(name=name, status="pending")
             continue
         status = link_status(link, resolved.mounts[name].path)
-        info[name] = BridgeInfo(name=name, status="pending" if status == "none" else status)
+        info[name] = BridgeInfo(name=name, status="pending" if status in {"none", "empty"} else status)
     return info
 
 
@@ -228,6 +236,12 @@ def _derive_link(resolved: ResolvedSpace, name: str, config: dict | None) -> Pat
         service_names.update(_managed_services(resolved, app))
     exec_path = resolved.mounts[name].vars["MOUNT_EXEC_PATH"]
     link = derive_host_link(exec_path, binds_for_services(config, service_names))
+    if link is None:
+        # Fallback: the app's compose service may be named differently from the
+        # app (external `composes:`), so the guessed names miss its workdir bind.
+        # Scan every service's binds — the longest-ancestor match still wins.
+        all_services = set((config.get("services") or {}).keys())
+        link = derive_host_link(exec_path, binds_for_services(config, all_services))
     return Path(os.path.abspath(link)) if link is not None else None
 
 
@@ -262,7 +276,9 @@ def _apply_bridge(resolved: ResolvedSpace, name: str, link: Path | None, owned: 
     if status == "conflict":
         from cupli.domain.errors import CupliError
 
-        raise CupliError("E032", kind="bridge", name=name, path=str(link), what="non-symlink file/dir")
+        raise CupliError(
+            "E032", kind="bridge", name=name, path=str(link), what="non-empty dir, file, or foreign symlink"
+        )
     action = "repaired" if status == "broken" else "created"
     try:
         _write_symlink(link, target, relative=relative)
@@ -276,9 +292,16 @@ def _apply_bridge(resolved: ResolvedSpace, name: str, link: Path | None, owned: 
 
 
 def _write_symlink(link: Path, target: Path, *, relative: bool) -> None:
-    """Create (or replace a stale) relative/absolute symlink ``link → target``."""
+    """Create (or replace a stale symlink / empty dir) ``link → target``.
+
+    A stale symlink is unlinked; an empty directory left by docker or a prior
+    run is removed. The caller (:func:`_apply_bridge`) only reaches here for the
+    ``none`` / ``broken`` / ``empty`` states, so removing the empty dir is safe.
+    """
     if link.is_symlink():
         link.unlink()
+    elif link.exists():
+        link.rmdir()
     create_dir(link.parent)
     dest = os.path.relpath(target, start=link.parent) if relative else str(target)
     os.symlink(dest, link)

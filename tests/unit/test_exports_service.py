@@ -83,8 +83,9 @@ def test_mark_stale_then_synced_transition(tmp_path: Path, monkeypatch: pytest.M
     """A build marks an export stale; a sync clears it to ``synced``."""
     resolved = _load(tmp_path)
 
-    def fake_sync(volume: str, image: str, host_path) -> None:
+    def fake_sync(volume: str, image: str, host_path) -> bool:
         (host_path / "left-pad").mkdir(parents=True, exist_ok=True)
+        return True
 
     monkeypatch.setattr(es, "_docker_sync", fake_sync)
     es.mark_stale(resolved, "web")
@@ -99,6 +100,39 @@ def test_sync_without_docker_reports_missing(tmp_path: Path) -> None:
     resolved = _load(tmp_path)
     rows = es.sync_exports(resolved, config=None)
     assert rows[0].status == "missing"
+
+
+def test_sync_status_reflects_empty_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A copy that produced no content reports ``missing``, not ``synced`` (Bug 1)."""
+    resolved = _load(tmp_path)
+    # Volume + image resolve, but the copy materialises nothing on the host.
+    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: True)
+    rows = es.sync_exports(resolved, config=_CONFIG)
+    assert rows[0].status == "missing"
+    assert es.list_exports(resolved)[0].status == "missing"
+
+
+def test_materialise_copies_and_chowns_as_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sync helper runs copy + chown as root in-container, never host-side (Bug 1)."""
+    captured: dict[str, list[str]] = {}
+
+    class _Done:
+        returncode = 0
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = list(argv)
+        return _Done()
+
+    monkeypatch.setattr(es, "run_command", _fake_run)
+    monkeypatch.setattr(es, "_owner_str", lambda: "1000:1000")
+    es._docker_sync("demo_nm", "demo-web:latest", tmp_path / "dst")
+    argv = captured["argv"]
+    script = argv[-1]
+    assert "--user" not in argv  # copy runs as root so it can read root-owned source
+    assert "demo_nm:/src:ro" in argv
+    assert "cp -a /src/. /dst/" in script
+    assert "chown -R 1000:1000 /dst" in script  # chown happens in-container, not host-side
+    assert "find /dst -mindepth 1 -delete" in script  # idempotent refresh
 
 
 # --- conflict / clean ------------------------------------------------------
@@ -118,7 +152,7 @@ def test_sync_conflict_on_foreign_dir_raises_e032(tmp_path: Path) -> None:
 def test_clean_removes_sync_host_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``clean_exports`` deletes a synced host copy and forgets its state."""
     resolved = _load(tmp_path)
-    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: (p / "x").mkdir(exist_ok=True))
+    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: bool((p / "x").mkdir(exist_ok=True)) or True)
     es.sync_exports(resolved, config=_CONFIG)
     host = resolved.exports["web-nm"].path
     assert host.exists()
@@ -144,7 +178,7 @@ def test_gitignore_added_idempotently(tmp_path: Path) -> None:
 def test_sync_writes_gitignore_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``gitignore: true`` export adds its host path to the root .gitignore."""
     resolved = _load(tmp_path)
-    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: (p / "x").mkdir(exist_ok=True))
+    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: bool((p / "x").mkdir(exist_ok=True)) or True)
     es.sync_exports(resolved, config=_CONFIG)
     gitignore = (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "/src/apps/web/node_modules" in gitignore

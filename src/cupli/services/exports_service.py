@@ -267,79 +267,70 @@ def _seed_bind(name: str, from_app: str, exec_path: str, host_path: Path, config
         warn(f"export {name!r}: cannot seed — service image for {from_app!r} not resolved (is docker available?)")
         return "missing"
     create_dir(host_path)
-    _docker_seed(image, exec_path, host_path)
-    _chown_to_host(name, host_path)
-    return "seeded"
+    ok = _docker_seed(image, exec_path, host_path)
+    return _verify_materialised(name, host_path, ok, "seeded")
 
 
 def _sync_volume(name: str, from_app: str, exec_path: str, host_path: Path, config: dict | None) -> str:
     """Copy the named volume backing ``exec_path`` to ``host_path`` (sync strategy)."""
-    volume = volume_for_exec_path(config, _service_names(from_app, config), exec_path)
-    image = service_image(config, _service_names(from_app, config))
+    services = _service_names(from_app, config)
+    volume = volume_for_exec_path(config, services, exec_path)
+    image = service_image(config, services)
     if volume is None or image is None:
         warn(f"export {name!r}: cannot sync — named volume / image for {exec_path} not resolved (is docker available?)")
         return "missing"
     create_dir(host_path)
-    _docker_sync(volume, image, host_path)
-    _chown_to_host(name, host_path)
-    return "synced"
+    ok = _docker_sync(volume, image, host_path)
+    return _verify_materialised(name, host_path, ok, "synced")
 
 
-def _docker_seed(image: str, exec_path: str, host_path: Path) -> None:
-    """``docker create`` → ``docker cp`` → ``docker rm`` to seed a host directory."""
-    created = run_command(["docker", "create", image], stream=False, check=False)
-    cid = created.stdout.strip()
-    if created.returncode != 0 or not cid:
-        return
-    try:
-        run_command(["docker", "cp", f"{cid}:{exec_path}/.", str(host_path)], stream=False, check=False)
-    finally:
-        run_command(["docker", "rm", "-f", cid], stream=False, check=False)
-
-
-def _docker_sync(volume: str, image: str, host_path: Path) -> None:
-    """Copy a named volume to the host via a throwaway container (preserves symlinks)."""
-    argv = [
-        "docker",
-        "run",
-        "--rm",
-        *_user_flag(),
-        "-v",
-        f"{volume}:/src:ro",
-        "-v",
-        f"{host_path}:/dst",
-        image,
-        "sh",
-        "-c",
-        "cp -a /src/. /dst/ 2>/dev/null || cp -a /src/. /dst/",
-    ]
-    run_command(argv, stream=False, check=False)
-
-
-def _user_flag() -> list[str]:
-    """Return ``['--user', 'uid:gid']`` on POSIX so copied files are host-owned."""
-    getuid = getattr(os, "getuid", None)
-    getgid = getattr(os, "getgid", None)
-    if getuid is None or getgid is None:
-        return []
-    return ["--user", f"{getuid()}:{getgid()}"]
-
-
-def _chown_to_host(name: str, host_path: Path) -> None:
-    """Best-effort chown of materialised files to the host user (``E033`` on failure)."""
-    getuid = getattr(os, "getuid", None)
-    getgid = getattr(os, "getgid", None)
-    if getuid is None or getgid is None:
-        return
-    uid, gid = getuid(), getgid()
-    try:
-        for entry in [host_path, *host_path.rglob("*")]:
-            os.chown(entry, uid, gid, follow_symlinks=False)
-    except PermissionError:
-        # Files already owned by the host user (the common case) need no chown;
-        # only foreign ownership trips this, which the container --user avoids.
-        spec = CupliError("E033", name=name, path=str(host_path), owner=f"{uid}:{gid}")
+def _verify_materialised(name: str, host_path: Path, ok: bool, success_status: str) -> str:
+    """Reconcile reported status with the on-disk fact after a materialise step."""
+    if not _is_populated(host_path):
+        warn(f"export {name!r}: nothing materialised at {host_path} (empty source or copy failed)")
+        return "missing"
+    if not ok:
+        spec = CupliError("E033", name=name, path=str(host_path), owner=_owner_str() or "host user")
         warn(f"{spec.args[0]}\n  {spec.hint}")
+    return success_status
+
+
+def _docker_seed(image: str, exec_path: str, host_path: Path) -> bool:
+    """Seed ``host_path`` from the image's ``exec_path`` (root copy + chown in-container)."""
+    return _materialise(image, host_path, src_mounts=[], copy_from=f"{exec_path.rstrip('/')}/.")
+
+
+def _docker_sync(volume: str, image: str, host_path: Path) -> bool:
+    """Copy a named volume to ``host_path`` (root copy + chown in-container; symlinks kept)."""
+    return _materialise(image, host_path, src_mounts=["-v", f"{volume}:/src:ro"], copy_from="/src/.")
+
+
+def _materialise(image: str, host_path: Path, *, src_mounts: list[str], copy_from: str) -> bool:
+    """Run a throwaway container that refreshes ``/dst`` from ``copy_from`` and chowns it.
+
+    The copy and the chown both run as **root inside the container**, so the
+    source is readable regardless of its in-image ownership and the result ends
+    up owned by the host uid/gid — no host-side chown (which would hit ``E033``
+    on root-owned files). ``cp -a`` preserves symlinks; a ``find -delete`` pass
+    first makes repeated syncs idempotent (no stale leftovers).
+
+    Returns True when the container exited cleanly.
+    """
+    owner = _owner_str()
+    chown = f" && chown -R {owner} /dst" if owner else ""
+    script = f"set -e; find /dst -mindepth 1 -delete 2>/dev/null || true; cp -a {copy_from} /dst/{chown}"
+    argv = ["docker", "run", "--rm", *src_mounts, "-v", f"{host_path}:/dst", image, "sh", "-c", script]
+    completed = run_command(argv, stream=False, check=False)
+    return completed.returncode == 0
+
+
+def _owner_str() -> str | None:
+    """Return ``"uid:gid"`` of the host user on POSIX, or ``None`` where unavailable."""
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None:
+        return None
+    return f"{getuid()}:{getgid()}"
 
 
 # --- guards / helpers ------------------------------------------------------
