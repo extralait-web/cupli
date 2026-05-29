@@ -1,3 +1,86 @@
+# v0.6.0
+
+Feature release: host-side materialisation for IDEs — `host_bridge` mount
+symlinks and the `exports:` block. Both are opt-in and backward-compatible;
+existing space files are unaffected. Configs using the new keys should pin
+`cupli_min: 0.6.0`.
+
+## Features
+
+* **`host_bridge` on a mount.** A mount whose `exec_path` lives under the
+  hosting app's workdir bind (e.g. `${APP_PATH}:/app`) can keep an inverse
+  host symlink — `<host-equivalent of exec_path> → mount.path` — so host
+  tooling (IDEs, workspace-package resolvers) sees the library at the same
+  relative path the container uses. This makes the relative symlinks pnpm
+  writes inside `node_modules` (`@scope/<lib> → ../../packages/<lib>`) resolve
+  on the host.
+
+  ```yaml
+  mounts:
+    web-ui-kit:
+      hosted_in: [web]
+      path: ${LIBS_PATH}/ui-kit
+      exec_path: /app/packages/ui-kit
+      host_bridge: true                 # auto-derive the host link from the workdir bind
+      # host_bridge:                     #   or override:
+      #   link: ${WEB_APP_PATH}/packages/ui-kit
+      #   relative: true                 #   relative symlink (default; portable)
+  ```
+
+  The link is created/repaired on `cupli up` and `cupli mounts attach`, and
+  removed on `cupli mounts detach`; manage it explicitly with
+  `cupli mounts bridge [names…]` / `cupli mounts unbridge [names…]`.
+  `cupli mounts list` gains a `bridge` column
+  (`none`/`pending`/`ok`/`broken`/`conflict`). cupli only touches symlinks it
+  created (tracked in `state/bridges.json`); a foreign non-symlink on the link
+  path is left alone and surfaces as `E032`. Auto-derivation reads the workdir
+  bind from `docker compose config`; an explicit `link:` works offline and is
+  exposed as `${<MOUNT>_BRIDGE_PATH}`. Symlink creation degrades gracefully on
+  platforms that cannot create symlinks.
+
+* **`exports:` — materialise container-built directories onto the host.** A new
+  top-level block copies a directory built inside a container (typically a
+  named volume such as `node_modules`) out to the host so IDEs that only
+  resolve from the local filesystem can index it. **For IDE indexing, not for
+  running host tooling** — the exported tree may carry native binaries built
+  for the image's libc, not the host's.
+
+  ```yaml
+  exports:
+    web-node-modules:
+      from: web                                   # the app (single) that owns it
+      exec_path: /app/node_modules                # container source
+      path: ${WEB_APP_PATH}/node_modules          # host destination
+      strategy: sync                              # sync (default) | bind-seeded
+      refresh_on: [build]                         # up | build | restart (default: [build])
+      gitignore: true                             # add path to root .gitignore (default true)
+  ```
+
+  - `sync` (default) keeps the named volume for container I/O and copies it to
+    the host one-way on each `refresh_on` event (symlinks preserved, so pnpm's
+    `.pnpm` / `@scope/<lib>` structure survives).
+  - `bind-seeded` turns `exec_path` into a host bind (injected into the
+    generated post-override) seeded from the image, so the container writes
+    straight to the host (always live).
+
+  Seeded/refreshed automatically after `up` / `build` / `restart` per
+  `refresh_on`; manage manually with `cupli exports list` / `sync` / `clean`.
+  Auto-vars `${EXPORT_PATH}` / `${EXPORT_EXEC_PATH}` / `${<NAME>_EXPORT_PATH}`
+  are available in scope. A foreign non-empty host directory cupli did not
+  create raises `E032`. Exporting a `.venv`-like path with editable installs
+  warns `E034` (a Python remote interpreter resolves fine — prefer it; opt in
+  with experimental `rewrite_paths: true`).
+
+* **New error codes** `E032` (host path occupied), `E033` (ownership mismatch),
+  `E034` (editable paths point into the container).
+
+## Chores
+
+* `AGENTS.md` documents the per-service-verb closure semantics introduced in
+  v0.5.3, plus the new `host_bridge` / `exports` schema, CLI verbs, auto-vars,
+  and error codes. README (EN + RU) and the full-reference example are updated;
+  `space.schema.json` is regenerated.
+
 # v0.5.3
 
 Patch release.
