@@ -1,3 +1,47 @@
+# v0.6.2
+
+Patch release. Seven fixes from the second real-world run of the `exports` /
+`host_bridge` features.
+
+## Fixes
+
+* **`host_bridge: true` auto-derivation returned "no hosting bind found".**
+  `derive_host_link` matched the mount's own injected bind (whose target equals
+  `exec_path`), yielding an empty relative part. It now requires a *strict*
+  ancestor, so the app's `/app` workdir bind wins — `host_bridge: true` works
+  without an explicit `link:` in the common case. Derivation is scoped to the
+  hosting app's compose service(s); a bind from an unrelated service (e.g.
+  another app that also binds its own directory to `/app`) no longer leaks in.
+
+* **`cupli mounts unbridge` reported "not cupli-owned" for symlinks cupli
+  created.** A conflicting mount raised mid-loop, so `state/bridges.json` was
+  never written and symlinks created earlier in the batch were orphaned.
+  Conflicts are now reported as per-mount results rather than a raised error,
+  ownership is persisted even when a later mount conflicts, and the conflict no
+  longer aborts the batch or `cupli up`. `cupli mounts bridge` still exits
+  non-zero when any mount conflicts.
+
+* **`host_bridge` broke on mounts bound directly under the app's `/app` bind**
+  (e.g. `docs`, `mkdocs.yml`). The host link path is the docker sub-mount
+  point, which the daemon creates as an empty directory or a 0-byte root-owned
+  file. cupli already reclaimed an empty directory; it now also reclaims a
+  0-byte file stub and replaces it with the bridge symlink. Only a non-empty
+  directory, a non-empty file, or a foreign symlink is a conflict (`E032`).
+
+* **`.venv` exports synced despite `E034`, producing broken editable installs.**
+  A `.venv`-like export is now skipped unless `rewrite_paths: true` is set —
+  editable `.pth` files carry absolute container paths (`/app/...`) that do not
+  exist on the host. With `rewrite_paths: true` (experimental) the sync rewrites
+  the container workdir prefix (`/app/...` → the app's host path) in `.pth` /
+  `.egg-link` files.
+
+* **`cupli exports clean` reported `missing` for a copy it had just removed.**
+  It now reports `removed`, and prunes the export's entry from the root
+  `.gitignore` (dropping the `# cupli exports` section once it is empty).
+
+* **`cupli graph` now lists an `exports` section** (name / from / `exec_path` →
+  host path / strategy), alongside `bases` / `apps` / `mounts` / `commands`.
+
 # v0.6.1
 
 Patch release. Fixes from the first real-world run of the v0.6.0 `exports` /
