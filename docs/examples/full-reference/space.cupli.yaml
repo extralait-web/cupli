@@ -141,7 +141,7 @@ apps:
   # from the cupli app.
   # -------------------------------------------------------------------
   redis:
-    service: agora-redis                           # bind to `services.agora-redis`
+    service: cache-redis                           # bind to `services.cache-redis`
     composes:
       - ${SPACE_PATH}/infra/redis.compose.yml
     tags: [infra]

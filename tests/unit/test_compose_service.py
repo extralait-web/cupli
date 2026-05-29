@@ -139,7 +139,7 @@ def test_pre_override_defaults_container_name(tmp_path: Path) -> None:
     """
     compose = tmp_path / "compose.yml"
     compose.write_text(
-        "services:\n  api:\n    image: api\n  agora-redis:\n    image: redis\n",
+        "services:\n  api:\n    image: api\n  cache-redis:\n    image: redis\n",
         encoding="utf-8",
     )
     space_file = _write(
@@ -147,14 +147,14 @@ def test_pre_override_defaults_container_name(tmp_path: Path) -> None:
         (
             "name: demo\napps:\n"
             f"  api:\n    composes: ['{compose}']\n"
-            f"  redis:\n    service: agora-redis\n    composes: ['{compose}']\n"
+            f"  redis:\n    service: cache-redis\n    composes: ['{compose}']\n"
         ),
     )
     resolved = load_space(space_file)
     pre_path, _, _ = render_overrides(resolved)
     data = yaml.safe_load(pre_path.read_text())
     assert data["services"]["api"]["container_name"] == "demo-api"
-    assert data["services"]["agora-redis"]["container_name"] == "demo-agora-redis"
+    assert data["services"]["cache-redis"]["container_name"] == "demo-cache-redis"
 
 
 def test_pre_override_strips_duplicate_project_prefix(tmp_path: Path) -> None:
@@ -398,7 +398,7 @@ def test_post_override_skips_undeclared_service(tmp_path: Path) -> None:
     ``image`` / ``build`` and ``docker compose config`` would reject it.
     """
     (tmp_path / "compose.yml").write_text(
-        "services:\n  agora-redis:\n    image: redis\n",
+        "services:\n  cache-redis:\n    image: redis\n",
         encoding="utf-8",
     )
     space_file = _write(
@@ -431,7 +431,7 @@ def test_post_override_attaches_default_network(tmp_path: Path) -> None:
 def test_post_override_handles_explicit_service_name(tmp_path: Path) -> None:
     """``apps.<name>.service`` is honoured: env injection lands on the real compose service."""
     (tmp_path / "compose.yml").write_text(
-        "services:\n  agora-redis:\n    image: redis\n",
+        "services:\n  cache-redis:\n    image: redis\n",
         encoding="utf-8",
     )
     space_file = _write(
@@ -440,7 +440,7 @@ def test_post_override_handles_explicit_service_name(tmp_path: Path) -> None:
             "name: demo\n"
             "apps:\n"
             "  redis:\n"
-            "    service: agora-redis\n"
+            "    service: cache-redis\n"
             f"    composes: ['{tmp_path / 'compose.yml'}']\n"
             "    vars:\n"
             "      FOO: bar\n"
@@ -450,8 +450,8 @@ def test_post_override_handles_explicit_service_name(tmp_path: Path) -> None:
     _, post_path, _ = render_overrides(resolved)
     data = yaml.safe_load(post_path.read_text())
     assert "redis" not in data["services"]
-    assert data["services"]["agora-redis"]["environment"] == {"FOO": "bar"}
-    assert "default" in data["services"]["agora-redis"]["networks"]
+    assert data["services"]["cache-redis"]["environment"] == {"FOO": "bar"}
+    assert "default" in data["services"]["cache-redis"]["networks"]
 
 
 def test_service_inline_shorthand_creates_single_service(tmp_path: Path) -> None:
@@ -483,19 +483,19 @@ def test_service_inline_shorthand_creates_single_service(tmp_path: Path) -> None
 
 def test_service_string_still_renames_compose_service(tmp_path: Path) -> None:
     """``service: 'name'`` (string form) keeps the old behaviour: bind to existing compose service."""
-    compose = _write_compose(tmp_path, "agora-redis")
+    compose = _write_compose(tmp_path, "cache-redis")
     space_file = _write(
         tmp_path / "space.cupli.yaml",
         (
             "name: demo\napps:\n"
-            f"  redis:\n    service: agora-redis\n    composes: ['{compose}']\n    vars:\n      FOO: bar\n"
+            f"  redis:\n    service: cache-redis\n    composes: ['{compose}']\n    vars:\n      FOO: bar\n"
         ),
     )
     resolved = load_space(space_file)
     _, post_path, _ = render_overrides(resolved)
     data = yaml.safe_load(post_path.read_text())
     assert "redis" not in data["services"]
-    assert data["services"]["agora-redis"]["environment"] == {"FOO": "bar"}
+    assert data["services"]["cache-redis"]["environment"] == {"FOO": "bar"}
 
 
 def test_inline_compose_creates_service_from_scratch(tmp_path: Path) -> None:

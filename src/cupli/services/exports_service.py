@@ -448,8 +448,8 @@ def _owning_services(resolved: ResolvedSpace, from_app: str) -> set[str]:
 
     Scoped to the app's managed services — NOT every service in the merged
     compose. Unioning all services let an unrelated app's image win when
-    resolving the source image (e.g. a Python ``core-back`` image used to seed a
-    JS ``node_modules`` export), copying the wrong content.
+    resolving the source image (e.g. a Python ``api-backend`` image used to seed
+    a JS ``node_modules`` export), copying the wrong content.
     """
     from cupli.services.compose_service import _managed_services
 

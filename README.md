@@ -296,7 +296,7 @@ apps:
 # 2) string (rename binding)
 apps:
   redis:
-    service: agora-redis        # bind to compose service `agora-redis`
+    service: cache-redis        # bind to compose service `cache-redis`
     composes: [./compose.yml]
 
 # 3) inline single-service (any compose attribute is fair game)
@@ -653,7 +653,7 @@ Full file: [`docs/examples/multi-repo-shop/`](docs/examples/multi-repo-shop/).
 ```yaml
 apps:
   redis:
-    service: agora-redis             # compose-fragment calls it agora-redis
+    service: cache-redis             # compose-fragment calls it cache-redis
     composes: [./compose.yml]
 ```
 

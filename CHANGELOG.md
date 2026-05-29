@@ -10,7 +10,7 @@ Patch release. Two fixes from a fresh-clone deploy of the `exports` /
   container ran a slow, network-bound `pnpm` / `uv install` (hanging on
   `ETIMEDOUT` in a restricted network). Two causes: the source image/volume
   were resolved against *every* service in the merged compose (so an unrelated
-  app's image could win — e.g. a Python `core-back` image used to seed a JS
+  app's image could win — e.g. a Python `api-backend` image used to seed a JS
   `node_modules` export), and on a fresh `cupli up --build` the image was not
   built yet when the seed ran. Source resolution is now scoped to the export's
   `from` app's compose service(s), and `cupli up` builds first (as a separate
@@ -267,7 +267,7 @@ Feature release: compose-style start conditions for `apps[*].deps`.
 
   ```yaml
   apps:
-    core-back:
+    api-backend:
       deps:
         postgres: service_healthy       # condition shorthand
         redis: ~                         # default (service_started)

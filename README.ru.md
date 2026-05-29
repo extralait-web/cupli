@@ -296,7 +296,7 @@ apps:
 # 2) Строка (rename binding)
 apps:
   redis:
-    service: agora-redis        # bind к compose-сервису `agora-redis`
+    service: cache-redis        # bind к compose-сервису `cache-redis`
     composes: [./compose.yml]
 
 # 3) Inline single-service (любые docker-compose атрибуты)
@@ -650,7 +650,7 @@ apps:
 ```yaml
 apps:
   redis:
-    service: agora-redis             # compose-фрагмент называет его agora-redis
+    service: cache-redis             # compose-фрагмент называет его cache-redis
     composes: [./compose.yml]
 ```
 
