@@ -181,6 +181,30 @@ A **mount** is a host-to-container bind that toggles on/off without
 editing YAML. Useful for hot-swapping a vendored SDK to a local
 checkout. `cupli mounts attach/detach <name>` flips the state.
 
+### Host resolution for IDEs (`host_bridge` & `exports`)
+
+IDEs index the **host** filesystem, while cupli runs everything inside
+containers. Two opt-in features bridge that gap (both are off by default and
+exist purely for editor resolution — never for running host tooling):
+
+* **`host_bridge`** on a mount keeps an inverse host symlink
+  (`<host-equivalent of exec_path> → mount.path`) so a library mounted under
+  the app workdir is visible on the host at the same relative path the
+  container uses. Lifecycle-managed (`up` / `mounts attach`/`detach`) or
+  explicit via `cupli mounts bridge` / `unbridge`.
+* **`exports`** copies a container-built directory (typically a named volume
+  like `node_modules`) onto the host. `strategy: sync` (default) mirrors the
+  volume on `refresh_on` events; `strategy: bind-seeded` turns the path into a
+  live host bind. Manage with `cupli exports sync` / `clean`.
+
+They compose: pnpm's relative symlinks inside an exported `node_modules`
+(`@scope/<lib> → ../../packages/<lib>`) resolve on the host only when
+`packages/<lib>` is bridged. There's an asymmetry between stacks — a JS remote
+(Docker) interpreter does **not** resolve dependencies, so `node_modules` must
+exist on the host; a Python remote interpreter resolves fine, so prefer it over
+exporting `.venv`. See the [`exports.<name>`](#exportsname) reference for
+fields.
+
 ### Service
 
 A **service** in cupli is exactly what docker-compose calls a service —
@@ -220,6 +244,7 @@ schema with one-line descriptions.
 | `bases` | map[str, base] | `{}` | Reusable templates. |
 | `apps` | map[str, app] | `{}` | Run units. |
 | `mounts` | map[str, mount] | `{}` | Toggleable bind-mounts. |
+| `exports` | map[str, export] | `{}` | Materialise container-built dirs (`node_modules`) onto the host for IDE resolution. |
 | `hooks` | map[str, hook-override] | `{}` | Per-target tweaks for `cupli hooks install`. |
 | `commands` | map[str, command-shortcut] | `{}` | `cupli sc <name>` / `cupli <name>` (with `top_level: true`). |
 | `networks` | map[str, dict] | `{}` | Top-level docker-compose `networks:` block. Values are compose-spec verbatim (`driver`, `name`, `ipam`, etc.). Cupli's `default` network is merged in automatically. |
@@ -326,8 +351,27 @@ apps:
 | `exec_path` | string | required | Absolute POSIX path inside container. |
 | `mode` | enum | `rw` | `rw` \| `ro`. |
 | `mac_volume` | enum | — | macOS volume consistency hint. |
+| `host_bridge` | bool \| map | `false` | Maintain an inverse host symlink so host tooling (IDEs) sees the mount at the container-relative path. `true` auto-derives the link from the hosting app's workdir bind; a map (`{link, relative}`) overrides it. See [host_bridge & exports](#host-resolution-for-ides-host_bridge--exports). |
 | `envs` | list[string] | `[]` | Env files. |
 | `vars` | map | `{}` | Variables. |
+
+### `exports.<name>`
+
+Materialise a directory built inside a container (typically a named volume
+such as `node_modules`) onto the host so IDEs that only resolve from the local
+filesystem can index it. **For IDE indexing, not for running host tooling** —
+exported native binaries may target the image's libc, not the host's.
+
+| Key | Type | Default | What it does |
+|---|---|---|---|
+| `from` | string | required | App (single) whose service owns the source directory. |
+| `exec_path` | string | required | Absolute POSIX source path inside the container. |
+| `path` | string | required | Host destination path (`${VAR}` resolved in scope). |
+| `strategy` | enum | `sync` | `sync` (keep the named volume, copy to host on `refresh_on`) or `bind-seeded` (turn `exec_path` into a host bind seeded from the image — always live). |
+| `refresh_on` | list[enum] \| string | `[build]` | Lifecycle events that re-materialise the export: `up`, `build`, `restart`. |
+| `gitignore` | bool | `true` | Add `path` to the root `.gitignore` (under a `# cupli exports` section). |
+| `mac_volume` | enum | — | macOS volume consistency hint. |
+| `rewrite_paths` | bool | `false` | Experimental: rewrite absolute container paths in exported files to host equivalents (for editable `.venv` installs). See `E034`. |
 
 ### `commands.<name>`
 
@@ -393,10 +437,12 @@ For a multi-line script, use a block scalar (newline-separated commands; add
   `LOCALS_DIR`, `LOCALS_PATH`, `NETWORK`, `COMPOSE_PROJECT_NAME`.
 * **Per-component** — `<NAME>_APP_PATH` for every app,
   `<NAME>_BASE_PATH` for every base, `<NAME>_MOUNT_PATH` for every
-  mount. Name is upper-cased with `-` mapped to `_`. Visible in YAML
-  AND in `override.env`.
+  mount, `<NAME>_EXPORT_PATH` for every export. Name is upper-cased with
+  `-` mapped to `_`. Visible in YAML AND in `override.env`. A mount with an
+  explicit `host_bridge.link` also exposes `<NAME>_BRIDGE_PATH`.
 * **App / base** — `APP_NAME`, `APP_PATH`, `APP_LOCAL_PATH` (apps only).
 * **Mount** — `MOUNT_NAME`, `MOUNT_PATH`, `MOUNT_HOST`, `MOUNT_EXEC_PATH`.
+* **Export** — `EXPORT_NAME`, `EXPORT_PATH`, `EXPORT_EXEC_PATH`.
 
 Default paths: `APPS_PATH` = `$SPACE_PATH/src/apps`, similarly for
 bases and mounts. Override per-component with an explicit `path:`.
@@ -506,9 +552,19 @@ These map straight onto compose `depends_on.<svc>.{condition,restart,required}`.
 
 | Command | What |
 |---|---|
-| `cupli mounts list` | every declared mount and its state. |
+| `cupli mounts list` | every declared mount and its state (incl. `host_bridge`). |
 | `cupli mounts attach <name>` | bind-mount into `hosted_in` apps. |
 | `cupli mounts detach <name>` | remove the bind. |
+| `cupli mounts bridge [names]` | create/repair `host_bridge` symlinks. |
+| `cupli mounts unbridge [names]` | remove cupli-created `host_bridge` symlinks. |
+
+### Exports
+
+| Command | What |
+|---|---|
+| `cupli exports list` | every declared export and its status (`missing`/`stale`/`seeded`/`synced`). |
+| `cupli exports sync [names]` | materialise / refresh host copies. |
+| `cupli exports clean [names]` | remove `sync` host copies (`bind-seeded` data kept). |
 
 ### Hooks
 

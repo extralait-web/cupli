@@ -274,6 +274,39 @@ mounts:
     vars:
       SDK_BUILD_DIR: /opt/sdk/build
 
+  ui-kit:                                          # workspace lib under the app workdir
+    path: ${MOUNTS_PATH}/ui-kit
+    hosted_in: [api]
+    exec_path: /app/packages/ui-kit
+    host_bridge: true                              # keep an inverse host symlink for IDEs;
+    # host_bridge:                                 #   or override the derived link:
+    #   link: ${API_APP_PATH}/packages/ui-kit
+    #   relative: true                             #   relative symlink (default; portable)
+
+
+# =====================================================================
+#  EXPORTS — materialise a container-built directory onto the host.
+#
+#  IDEs index the host filesystem; cupli runs everything in containers.
+#  `exports` copies a directory built inside the image (usually living in
+#  a named volume, e.g. node_modules) out to the host for editor
+#  resolution. FOR INDEXING, NOT for running host tooling — exported
+#  native binaries may target the image's libc, not the host's.
+#
+#  Pairs with `host_bridge`: relative symlinks inside an exported
+#  node_modules resolve on the host only when the bridged lib path exists.
+# =====================================================================
+exports:
+
+  node-modules:
+    from: api                                      # the app (single) that owns the dir
+    exec_path: /app/node_modules                   # container source
+    path: ${API_APP_PATH}/node_modules             # host destination
+    strategy: sync                                 # sync (keep volume, copy on refresh) | bind-seeded
+    refresh_on: [build]                            # up | build | restart (default: [build])
+    gitignore: true                                # add path to root .gitignore (default true)
+    mac_volume: cached                             # optional macOS perf hint
+
 
 # =====================================================================
 #  NETWORKS — top-level docker-compose `networks:` block.

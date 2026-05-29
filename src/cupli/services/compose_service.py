@@ -202,6 +202,7 @@ def _per_component_path_vars(resolved: ResolvedSpace) -> dict[str, str]:
         ("APP", {name: comp.path for name, comp in resolved.apps.items()}),
         ("MOUNT", {name: comp.path for name, comp in resolved.mounts.items()}),
         ("BASE", {name: comp.path for name, comp in resolved.bases.items()}),
+        ("EXPORT", {name: comp.path for name, comp in resolved.exports.items()}),
     ]
     produced: dict[str, str] = {}
     sources: dict[str, list[str]] = {}
@@ -320,6 +321,7 @@ def _build_override_post(resolved: ResolvedSpace, declared: set[str]) -> dict:
     _inject_service_environment(resolved, services, declared)
     _inject_service_ports(resolved, services, declared)
     _inject_mount_volumes(resolved, services, declared)
+    _inject_export_binds(resolved, services, declared)
     _inject_cross_file_deps(resolved, services, declared)
     _inject_default_networks(declared, services)
     return {"services": services} if services else {}
@@ -423,6 +425,31 @@ def _inject_mount_volumes(resolved: ResolvedSpace, services: dict, declared: set
                     continue
                 block = services.setdefault(svc_name, {})
                 block.setdefault("volumes", []).append(volume_entry)
+
+
+def _inject_export_binds(resolved: ResolvedSpace, services: dict, declared: set[str]) -> None:
+    """Replace the named volume at a ``bind-seeded`` export's ``exec_path`` with a host bind.
+
+    Compose merges service ``volumes`` by container target, so a long-form bind
+    entry at the same target as the original named volume overrides it — the
+    container then writes straight to the host ``path`` (always live for IDEs).
+    Only ``bind-seeded`` exports inject here; ``sync`` exports keep the volume.
+    """
+    from cupli.domain.enums import ExportStrategy
+
+    for name, export in resolved.space.exports.items():
+        if export.strategy is not ExportStrategy.BIND_SEEDED:
+            continue
+        entry = {
+            "type": "bind",
+            "source": str(resolved.exports[name].path),
+            "target": resolved.exports[name].vars["EXPORT_EXEC_PATH"],
+        }
+        for svc_name in _managed_services(resolved, export.from_app):
+            if svc_name not in declared:
+                continue
+            block = services.setdefault(svc_name, {})
+            block.setdefault("volumes", []).append(entry)
 
 
 def _inject_cross_file_deps(resolved: ResolvedSpace, services: dict, declared: set[str]) -> None:
@@ -776,6 +803,27 @@ def build_env(plan: CompiledPlan) -> dict[str, str]:
     }
 
 
+def resolved_compose_config(plan: CompiledPlan) -> dict | None:
+    """Return the merged compose config (``docker compose config --format json``).
+
+    Returns ``None`` when docker is unreachable, the command fails, or the
+    output is empty. Callers that walk binds / volumes (mount-target prep,
+    host bridges, export materialisation) share this single read.
+    """
+    import json as _json
+
+    argv = build_argv(plan, ["config", "--format", "json"])
+    env = {**os.environ, **build_env(plan)}
+    completed = run_command(argv, cwd=plan.project_dir, env=env, stream=False, check=False)
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+    try:
+        config = _json.loads(completed.stdout)
+    except ValueError:
+        return None
+    return config if isinstance(config, dict) else None
+
+
 _MOUNT_PREP_VERBS: frozenset[str] = frozenset({"up", "build", "run", "watch"})
 """Compose verbs that materialise mounts and benefit from pre-created targets."""
 
@@ -816,6 +864,7 @@ __all__ = (
     "invoke",
     "make_plan",
     "render_overrides",
+    "resolved_compose_config",
     "target_services",
     "write_env_file",
 )

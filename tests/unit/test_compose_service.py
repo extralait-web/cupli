@@ -217,6 +217,53 @@ def test_post_override_injects_mount_volumes(tmp_path: Path) -> None:
     assert data["services"]["migrate"]["volumes"] == [f"{resolved.mounts['sdk'].path}:/opt/sdk:rw"]
 
 
+def test_post_override_injects_bind_seeded_export_volume(tmp_path: Path) -> None:
+    """A ``bind-seeded`` export injects a host bind at its ``exec_path``."""
+    compose = _write_compose(tmp_path, "web")
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        (
+            "name: demo\n"
+            "apps:\n"
+            f"  web:\n    composes: ['{compose}']\n"
+            "exports:\n"
+            "  nm:\n"
+            "    from: web\n"
+            "    exec_path: /app/node_modules\n"
+            "    path: ${WEB_APP_PATH}/node_modules\n"
+            "    strategy: bind-seeded\n"
+        ),
+    )
+    resolved = load_space(space_file)
+    _, post_path, _ = render_overrides(resolved)
+    data = yaml.safe_load(post_path.read_text())
+    volumes = data["services"]["web"]["volumes"]
+    assert {"type": "bind", "source": str(resolved.exports["nm"].path), "target": "/app/node_modules"} in volumes
+
+
+def test_post_override_skips_sync_export_volume(tmp_path: Path) -> None:
+    """A ``sync`` export keeps the named volume — no bind is injected."""
+    compose = _write_compose(tmp_path, "web")
+    space_file = _write(
+        tmp_path / "space.cupli.yaml",
+        (
+            "name: demo\n"
+            "apps:\n"
+            f"  web:\n    composes: ['{compose}']\n"
+            "exports:\n"
+            "  nm:\n"
+            "    from: web\n"
+            "    exec_path: /app/node_modules\n"
+            "    path: ${WEB_APP_PATH}/node_modules\n"
+            "    strategy: sync\n"
+        ),
+    )
+    resolved = load_space(space_file)
+    _, post_path, _ = render_overrides(resolved)
+    data = yaml.safe_load(post_path.read_text())
+    assert "volumes" not in data.get("services", {}).get("web", {})
+
+
 def test_post_override_injects_per_service_environment(tmp_path: Path) -> None:
     """Each app's ``vars:`` lands in ``services.<svc>.environment``."""
     compose = _write_compose(tmp_path, "api", "worker")

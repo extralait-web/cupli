@@ -199,6 +199,37 @@ ERRORS: Final[dict[str, ErrorSpec]] = {
             " least one compose-spec field (e.g. `image:`)."
         ),
     ),
+    "E032": ErrorSpec(
+        title="Host path occupied",
+        template=("Cannot materialise {kind} {name!r}: host path {path} already holds a non-cupli object ({what})"),
+        hint=(
+            "Move or remove the existing path, or run `cupli exports clean"
+            " <name>` / `cupli mounts unbridge <name>` if cupli created it"
+            " earlier. cupli never overwrites foreign host objects."
+        ),
+    ),
+    "E033": ErrorSpec(
+        title="Ownership mismatch",
+        template="Failed to chown materialised export {name!r} at {path} to {owner}",
+        hint=(
+            "Check that the current user may chown the host path (no root-owned"
+            " parents from an earlier docker run). Re-run after fixing"
+            " permissions."
+        ),
+    ),
+    "E034": ErrorSpec(
+        title="Editable paths point into container",
+        template=(
+            "Export {name!r} ({exec_path}) likely contains editable installs"
+            " with absolute container paths that do not exist on the host"
+        ),
+        hint=(
+            "Python resolves fine through a remote (Docker Compose)"
+            " interpreter — prefer that over exporting `.venv`. To export"
+            " anyway, set `rewrite_paths: true` (experimental) to rewrite"
+            " absolute container paths to their host equivalents on sync."
+        ),
+    ),
 }
 """Catalog of all numbered cupli errors."""
 

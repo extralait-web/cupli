@@ -315,10 +315,12 @@ def _register_exec() -> None:
 
 
 def _register_mounts() -> None:
-    """Wire the ``mounts`` subapp."""
+    """Wire the ``mounts`` and ``exports`` subapps."""
+    from cupli.cli.exports import exports_app
     from cupli.cli.mounts import mounts_app
 
     app.add_typer(mounts_app, name="mounts", rich_help_panel=PANEL_INTEGRATIONS)
+    app.add_typer(exports_app, name="exports", rich_help_panel=PANEL_INTEGRATIONS)
 
 
 def _register_hooks() -> None:

@@ -46,7 +46,9 @@ space.cupli.yaml
 │      • service: {...} →  inline single-service (any compose attrs)
 │      • services: {...}→  multi-service map (compound app)
 │      • services: [a,b]→  same, list-form shorthand for empty overrides
-├─ mounts:            toggleable bind-mounts (cupli mounts attach/detach)
+├─ mounts:            toggleable bind-mounts (cupli mounts attach/detach);
+│                     `host_bridge:` keeps an inverse host symlink for IDEs
+├─ exports:           materialise container-built dirs (node_modules) to host
 ├─ networks:          docker-compose `networks:` block (compose-spec verbatim)
 ├─ volumes:           top-level `volumes:` block (named volumes, verbatim)
 ├─ secrets:           top-level `secrets:` block (secret definitions, verbatim)
@@ -61,8 +63,8 @@ every invocation:
 * `docker-compose.pre.yml` — defaults (network, `container_name`) plus any
   top-level `volumes:` / `secrets:` / `configs:` blocks (verbatim).
 * `docker-compose.inline.yml` — services declared inline.
-* `docker-compose.post.yml` — `environment` / `ports` / `volumes` /
-  `depends_on` / `networks` injection.
+* `docker-compose.post.yml` — `environment` / `ports` / `volumes` (mounts +
+  `bind-seeded` export binds) / `depends_on` / `networks` injection.
 
 Plus `override.env` with all space-scope vars + per-component
 `<NAME>_APP_PATH` etc. that docker-compose substitutes into compose
@@ -313,6 +315,76 @@ mounts:
 
 Toggle: `cupli mounts attach shared-sdk` / `cupli mounts detach shared-sdk`.
 
+### "Let the IDE resolve a workspace library mounted under the app workdir"
+
+Add `host_bridge: true` to a mount whose `exec_path` lives under the hosting
+app's workdir bind (e.g. `${APP_PATH}:/app`). cupli maintains an inverse
+host symlink — `<host-equivalent of exec_path> → mount.path` — so host
+tooling (IDEs, workspace-package resolvers) sees the library at the same
+relative path the container uses:
+
+```yaml
+mounts:
+  web-ui-kit:
+    hosted_in: [ web ]
+    path: ${LIBS_PATH}/ui-kit
+    exec_path: /app/packages/ui-kit
+    host_bridge: true                 # auto-derive the host link from the workdir bind
+    # or override:
+    # host_bridge:
+    #   link: ${WEB_APP_PATH}/packages/ui-kit   # explicit host link
+    #   relative: true                           # relative symlink (default; portable)
+```
+
+- Created/repaired on `cupli up` and `cupli mounts attach`; removed on
+  `cupli mounts detach`. Run explicitly with `cupli mounts bridge [names…]` /
+  `cupli mounts unbridge [names…]`.
+- cupli only touches symlinks it created (tracked in `state/bridges.json`).
+  A foreign non-symlink on the link path is left alone and surfaces as `E032`.
+- Auto-derivation reads `docker compose config` for the workdir bind; an
+  explicit `link:` works offline and is exposed as `${<MOUNT>_BRIDGE_PATH}`.
+- `cupli mounts list` shows a `bridge` column (`none`/`pending`/`ok`/
+  `broken`/`conflict`).
+
+### "Materialise node_modules on the host so the IDE resolves dependencies"
+
+JetBrains/VS Code do not resolve JS dependencies through a remote (Docker)
+Node interpreter, so `node_modules` must exist as real files on the host. The
+`exports:` block copies a container-built directory (living in a named volume)
+out to the host. **Export is for IDE indexing, not for running host tooling**
+— the exported tree may carry native binaries for the image's libc, not the
+host's.
+
+```yaml
+exports:
+  web-node-modules:
+    from: web                                   # the app (single) whose service owns it
+    exec_path: /app/node_modules                # container source
+    path: ${WEB_APP_PATH}/node_modules          # host destination
+    strategy: sync                              # sync (default) | bind-seeded
+    refresh_on: [ build ]                       # up | build | restart (default: [build])
+    gitignore: true                             # add path to root .gitignore (default true)
+```
+
+- **`sync`** (default, recommended) — keeps the named volume for container
+  I/O and copies it to the host one-way on each `refresh_on` event. Symlinks
+  are preserved, so pnpm's `.pnpm` / `@scope/<lib>` structure survives.
+- **`bind-seeded`** — turns `exec_path` into a host bind (injected into the
+  generated post-override) seeded from the image, so the container writes
+  straight to the host (always live).
+- Lifecycle: seeded/refreshed automatically after `up` / `build` / `restart`
+  per `refresh_on`; manually via `cupli exports sync [names…]`. Inspect with
+  `cupli exports list` (`missing`/`stale`/`seeded`/`synced`); remove a `sync`
+  host copy with `cupli exports clean [names…]`. Auto-vars `${EXPORT_PATH}` /
+  `${EXPORT_EXEC_PATH}` / `${<NAME>_EXPORT_PATH}` are available in scope.
+- Pair with `host_bridge` mounts: the relative symlinks inside `node_modules`
+  (`@scope/<lib> → ../../packages/<lib>`) resolve on the host only when
+  `packages/<lib>` is bridged too.
+- **`.venv` caveat:** a Python remote (Docker Compose) interpreter resolves
+  fine, so prefer it. Exporting `.venv` warns `E034` because editable installs
+  write absolute container paths; opt in with `rewrite_paths: true`
+  (experimental).
+
 ### "Add a top-level command for linting"
 
 ```yaml
@@ -441,6 +513,10 @@ cupli config                    # print merged docker-compose config
 cupli graph                     # tree of bases/apps/mounts/commands
 cupli env                       # full resolved env-file
 cupli env -c <app>              # an app's resolved scope
+cupli mounts list               # mounts + host_bridge status
+cupli mounts bridge / unbridge  # create / remove host_bridge symlinks
+cupli exports list              # exports + materialisation status
+cupli exports sync / clean      # materialise / remove host copies
 cupli --strict-vars <cmd>       # promote ${UNKNOWN} warnings to errors
 cupli -V                        # version (script-friendly)
 ```
@@ -472,6 +548,9 @@ E002 Validation failed
 | `E029` | Space file already exists.             | `cupli init --force` to overwrite.                                                                                                                                                                                        |
 | `E030` | Per-component env-var name collision.  | Rename one of the components (`shop-api` and `shop_api` both → `SHOP_API_APP_PATH`).                                                                                                                                      |
 | `E031` | Planned service not declared anywhere. | Either add it to a compose-fragment listed under `composes:` (and run `cupli space sync` if the repo isn't cloned yet), or supply at least one inline compose field (e.g. `image:`) under `service:` / `services.<name>`. |
+| `E032` | Host path for a bridge/export is occupied by a foreign object. | Move/remove it, or `cupli exports clean` / `cupli mounts unbridge` if cupli made it. cupli never overwrites foreign host objects. |
+| `E033` | Could not chown a materialised export to the host user. | Fix permissions on the host path (no root-owned parents from an earlier docker run), then re-sync. |
+| `E034` | Exporting a `.venv`-like path with editable installs (absolute container paths). | Prefer a remote Python interpreter; or set `rewrite_paths: true` (experimental) to export anyway. |
 
 ---
 

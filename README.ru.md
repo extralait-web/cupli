@@ -181,6 +181,30 @@ cupli exec -c cache -- redis-cli ping        # PONG
 без правки YAML. Полезно для hot-swap общего SDK на локальный чекаут.
 `cupli mounts attach/detach <name>` переключает состояние.
 
+### Резолв на хосте для IDE (`host_bridge` и `exports`)
+
+IDE индексируют **хостовую** ФС, тогда как cupli гоняет всё в контейнерах.
+Две opt-in возможности закрывают разрыв (обе выключены по умолчанию и нужны
+только для резолва в редакторе — не для запуска host-тулинга):
+
+* **`host_bridge`** на mount держит инверсный host-симлинк
+  (`<host-эквивалент exec_path> → mount.path`), чтобы либа, примонтированная
+  под workdir приложения, была видна на хосте по тому же относительному пути,
+  что и в контейнере. Управляется lifecycle (`up` / `mounts attach`/`detach`)
+  или явно через `cupli mounts bridge` / `unbridge`.
+* **`exports`** копирует container-built директорию (обычно named volume вроде
+  `node_modules`) на хост. `strategy: sync` (default) зеркалит том по событиям
+  `refresh_on`; `strategy: bind-seeded` превращает путь в живой host-bind.
+  Управление: `cupli exports sync` / `clean`.
+
+Они работают в связке: относительные симлинки внутри экспортированного
+`node_modules` (`@scope/<lib> → ../../packages/<lib>`) резолвятся на хосте
+только когда `packages/<lib>` тоже сбриджен. Есть асимметрия стеков — JS
+remote-интерпретатор (Docker) **не** резолвит зависимости, поэтому
+`node_modules` обязан быть на хосте; Python remote-интерпретатор резолвит
+нормально, так что экспортировать `.venv` не стоит. См. справку
+[`exports.<name>`](#exportsname).
+
 ### Service
 
 **Service** в cupli — это то же, что docker-compose называет service:
@@ -326,8 +350,27 @@ apps:
 | `exec_path` | string | required | Абсолютный POSIX-путь внутри контейнера. |
 | `mode` | enum | `rw` | `rw` \| `ro`. |
 | `mac_volume` | enum | — | macOS volume consistency hint. |
+| `host_bridge` | bool \| map | `false` | Держать инверсный host-симлинк, чтобы host-тулинг (IDE) видел mount по container-относительному пути. `true` авто-выводит линк из workdir-bind хостящего приложения; map (`{link, relative}`) переопределяет. См. [host_bridge и exports](#резолв-на-хосте-для-ide-host_bridge-и-exports). |
 | `envs` | list[string] | `[]` | Env-файлы. |
 | `vars` | map | `{}` | Переменные. |
+
+### `exports.<name>`
+
+Материализация директории, собранной внутри контейнера (обычно named volume
+вроде `node_modules`), на хост — чтобы IDE, резолвящие только из локальной ФС,
+её проиндексировали. **Для индексации в IDE, не для запуска host-тулинга** —
+экспортированные нативные бинари могут быть собраны под libc образа, не хоста.
+
+| Ключ | Тип | Default | Что делает |
+|---|---|---|---|
+| `from` | string | required | Приложение (одно), сервис которого владеет директорией-источником. |
+| `exec_path` | string | required | Абсолютный POSIX-путь источника внутри контейнера. |
+| `path` | string | required | Путь назначения на хосте (`${VAR}` резолвятся в scope). |
+| `strategy` | enum | `sync` | `sync` (оставить named volume, копировать на хост по `refresh_on`) или `bind-seeded` (превратить `exec_path` в host-bind, засидив из образа — всегда live). |
+| `refresh_on` | list[enum] \| string | `[build]` | Lifecycle-события для рематериализации: `up`, `build`, `restart`. |
+| `gitignore` | bool | `true` | Добавить `path` в корневой `.gitignore` (в секцию `# cupli exports`). |
+| `mac_volume` | enum | — | macOS volume consistency hint. |
+| `rewrite_paths` | bool | `false` | Experimental: переписывать абсолютные container-пути в экспортированных файлах на host-эквиваленты (для editable `.venv`-инсталлов). См. `E034`. |
 
 ### `commands.<name>`
 
@@ -393,10 +436,12 @@ commands:
   `LOCALS_DIR`, `LOCALS_PATH`, `NETWORK`, `COMPOSE_PROJECT_NAME`.
 * **Per-component** — `<NAME>_APP_PATH` для каждого app,
   `<NAME>_BASE_PATH` для каждого base, `<NAME>_MOUNT_PATH` для
-  каждого mount. Имя upper-case + `-` → `_`. Видно в YAML И в
-  `override.env`.
+  каждого mount, `<NAME>_EXPORT_PATH` для каждого export. Имя upper-case +
+  `-` → `_`. Видно в YAML И в `override.env`. Mount с явным
+  `host_bridge.link` также экспортит `<NAME>_BRIDGE_PATH`.
 * **App / base** — `APP_NAME`, `APP_PATH`, `APP_LOCAL_PATH` (только apps).
 * **Mount** — `MOUNT_NAME`, `MOUNT_PATH`, `MOUNT_HOST`, `MOUNT_EXEC_PATH`.
+* **Export** — `EXPORT_NAME`, `EXPORT_PATH`, `EXPORT_EXEC_PATH`.
 
 Дефолтные пути: `APPS_PATH` = `$SPACE_PATH/src/apps`, аналогично для
 bases и mounts. Override per-component через явный `path:`.
@@ -503,9 +548,19 @@ apps:
 
 | Команда | Что |
 |---|---|
-| `cupli mounts list` | все mount'ы и их state. |
+| `cupli mounts list` | все mount'ы и их state (вкл. `host_bridge`). |
 | `cupli mounts attach <name>` | bind в `hosted_in` apps. |
 | `cupli mounts detach <name>` | снять bind. |
+| `cupli mounts bridge [names]` | создать/починить `host_bridge`-симлинки. |
+| `cupli mounts unbridge [names]` | удалить созданные cupli `host_bridge`-симлинки. |
+
+### Exports
+
+| Команда | Что |
+|---|---|
+| `cupli exports list` | все экспорты и их статус (`missing`/`stale`/`seeded`/`synced`). |
+| `cupli exports sync [names]` | материализовать / обновить host-копии. |
+| `cupli exports clean [names]` | удалить host-копии `sync` (данные `bind-seeded` сохраняются). |
 
 ### Hooks
 

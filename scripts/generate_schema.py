@@ -193,6 +193,7 @@ STRING_OR_LIST_FIELDS: frozenset[str] = frozenset({
     "after_start",
     "after_stop",
     "container",
+    "refresh_on",
 })
 """Fields whose Pydantic side accepts both a bare string and a list (auto-wrap).
 

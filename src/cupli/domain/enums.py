@@ -71,6 +71,32 @@ class DepCondition(str, Enum):
     SERVICE_COMPLETED_SUCCESSFULLY = "service_completed_successfully"
 
 
+class ExportStrategy(str, Enum):
+    """Materialisation strategy for an ``exports[*]`` entry.
+
+    ``BIND_SEEDED`` turns the service's ``exec_path`` into a host bind seeded
+    from the image (the container then writes directly to the host — always
+    live). ``SYNC`` keeps the named volume for container I/O and copies it to
+    the host one-way on ``refresh_on`` events (a read-mostly mirror for IDE
+    indexing).
+    """
+
+    BIND_SEEDED = "bind-seeded"
+    SYNC = "sync"
+
+
+class RefreshHook(str, Enum):
+    """Lifecycle event after which an export is refreshed.
+
+    Listed in ``exports[*].refresh_on``. cupli re-materialises the export for
+    the affected ``from`` service after the matching operation completes.
+    """
+
+    UP = "up"
+    BUILD = "build"
+    RESTART = "restart"
+
+
 class ExecuteMode(str, Enum):
     """Execution strategy for a multi-container ``commands[*]`` shortcut.
 

@@ -29,7 +29,16 @@ from cupli.domain.consts import (
     TAG_PATTERN,
     VERSION_PATTERN,
 )
-from cupli.domain.enums import DepCondition, DepMode, ExecuteMode, MacVolumeMode, MountMode, ServiceMode
+from cupli.domain.enums import (
+    DepCondition,
+    DepMode,
+    ExecuteMode,
+    ExportStrategy,
+    MacVolumeMode,
+    MountMode,
+    RefreshHook,
+    ServiceMode,
+)
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z][\w-]*)\s*\}\}")
 """Matches ``{{name}}`` argument placeholders inside a command's ``run`` line."""
@@ -507,6 +516,39 @@ class AppModel(_Component):
         return app_name
 
 
+def _require_absolute_posix(value: str, *, field: str) -> str:
+    """Return ``value`` when it is an absolute POSIX path or a ``${VAR}`` ref.
+
+    A leading ``$`` is accepted because the path may be a variable reference
+    resolved later by the loader (``${APP_PATH}/...``); otherwise it must start
+    with ``/``.
+    """
+    if value.startswith(("$", "/")):
+        return value
+    raise ValueError(
+        f"{field} must be an absolute POSIX path (start with '/'), got: {value!r}",
+    )
+
+
+class HostBridgeSpec(_Frozen):
+    """Expanded form of a mount's ``host_bridge`` declaration.
+
+    Used when the auto-derived host link (``<bind-source> + (exec_path −
+    bind-target)``) is not what you want, or to opt out of relative symlinks.
+
+    Attributes:
+        link: explicit host path for the bridge symlink. Overrides the
+            auto-derived link. ``${VAR}`` references are resolved in the
+            mount's scope. When ``None``, cupli derives the link from the
+            hosting app's workdir bind.
+        relative: when True (default), create a relative symlink so the
+            workspace stays portable across machines.
+    """
+
+    link: str | None = None
+    relative: bool = True
+
+
 class MountModel(_Component):
     """One ``mounts[<name>]`` entry.
 
@@ -515,23 +557,85 @@ class MountModel(_Component):
         exec_path: absolute POSIX path inside the container.
         mode: read-write or read-only bind-mount.
         mac_volume: optional macOS volume consistency hint.
+        host_bridge: opt-in host symlink so host tooling (IDEs, workspace
+            resolvers) sees the mount at the same relative path the container
+            uses. ``true`` enables auto-derivation; a mapping is a
+            :class:`HostBridgeSpec` for overrides. ``false`` (default) is off.
     """
 
     hosted_in: NameList = Field(min_length=1)
     exec_path: str
     mode: MountMode = MountMode.RW
     mac_volume: MacVolumeMode | None = None
+    host_bridge: bool | HostBridgeSpec = False
 
     @model_validator(mode="after")
     def _validate_exec_path(self) -> Self:
         """``exec_path`` must be absolute (or start with a ``${VAR}`` ref)."""
-        value = self.exec_path
-        if value.startswith("$"):
-            return self
-        if not value.startswith("/"):
-            raise ValueError(
-                f"exec_path must be an absolute POSIX path (start with '/'), got: {value!r}",
-            )
+        _require_absolute_posix(self.exec_path, field="exec_path")
+        return self
+
+    @property
+    def bridge_enabled(self) -> bool:
+        """Return True when this mount maintains a host_bridge symlink."""
+        return self.host_bridge is not False
+
+    @property
+    def bridge_spec(self) -> HostBridgeSpec:
+        """Return the effective :class:`HostBridgeSpec` (defaults when ``true``)."""
+        if isinstance(self.host_bridge, HostBridgeSpec):
+            return self.host_bridge
+        return HostBridgeSpec()
+
+
+class ExportModel(_Frozen):
+    """One ``exports[<name>]`` entry.
+
+    Materialises a directory built inside a container (typically living in a
+    named volume — ``node_modules``, optionally ``.venv``) onto the host so
+    IDEs that only resolve from the local filesystem see it.
+
+    Export is for IDE indexing, NOT for running host tooling: the exported
+    tree may carry native binaries built for the image's libc, not the host's.
+
+    Attributes:
+        from_app: the app (single) whose service owns the source directory.
+        exec_path: absolute POSIX source path inside the container.
+        path: host destination path (``${VAR}`` references resolved in scope).
+        strategy: ``sync`` (default — keep the named volume, copy to host on
+            ``refresh_on``) or ``bind-seeded`` (turn ``exec_path`` into a host
+            bind seeded from the image).
+        refresh_on: lifecycle events that trigger a refresh (default
+            ``[build]``).
+        gitignore: when True (default), add ``path`` to the root ``.gitignore``.
+        mac_volume: optional macOS volume consistency hint.
+        rewrite_paths: experimental — rewrite absolute container paths inside
+            exported files to their host equivalents on sync (for editable
+            ``.venv`` installs). Off by default; see ``E034``.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+        populate_by_name=True,
+    )
+
+    from_app: NameStr = Field(alias="from")
+    exec_path: str
+    path: str
+    strategy: ExportStrategy = ExportStrategy.SYNC
+    refresh_on: Annotated[list[RefreshHook], BeforeValidator(_wrap_str_as_list)] = Field(
+        default_factory=lambda: [RefreshHook.BUILD],
+    )
+    gitignore: bool = True
+    mac_volume: MacVolumeMode | None = None
+    rewrite_paths: bool = False
+
+    @model_validator(mode="after")
+    def _validate_exec_path(self) -> Self:
+        """``exec_path`` must be absolute (or start with a ``${VAR}`` ref)."""
+        _require_absolute_posix(self.exec_path, field="exec_path")
         return self
 
 
@@ -569,6 +673,9 @@ class SpaceModel(_Frozen):
         configs: optional top-level ``configs:`` block. Config definitions are
             declared verbatim so service-level ``configs:`` references resolve.
             No synthetic default is injected.
+        exports: optional ``exports:`` block. Each entry materialises a
+            container-built directory (e.g. ``node_modules``) onto the host so
+            IDEs resolve dependencies locally. Opt-in; absent by default.
     """
 
     schema_version: Literal[1] = DEFAULT_SCHEMA_VERSION
@@ -587,14 +694,16 @@ class SpaceModel(_Frozen):
     volumes: ComposeBlockMap = Field(default_factory=dict)
     secrets: ComposeBlockMap = Field(default_factory=dict)
     configs: ComposeBlockMap = Field(default_factory=dict)
+    exports: dict[NameStr, ExportModel] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> Self:
-        """Validate inter-section references (apps.bases, apps.deps, mounts.hosted_in)."""
+        """Validate inter-section references (apps.bases, apps.deps, mounts.hosted_in, exports.from)."""
         _check_app_bases(self.apps, self.bases)
         _check_app_deps(self.apps)
         _check_mount_hosts(self.mounts, self.apps)
         _check_command_containers(self.commands, self.apps)
+        _check_export_sources(self.exports, self.apps)
         return self
 
 
@@ -649,6 +758,17 @@ def _check_command_containers(
             continue
         raise ValueError(
             f"commands.{cmd_name}.container references unknown app(s): {unknown!r}. Declared apps: {sorted(known)!r}",
+        )
+
+
+def _check_export_sources(exports: dict[str, ExportModel], apps: dict[str, AppModel]) -> None:
+    """Raise when an export references an undeclared ``from`` app."""
+    known = set(apps)
+    for export_name, export in exports.items():
+        if export.from_app in known:
+            continue
+        raise ValueError(
+            f"exports.{export_name}.from references unknown app {export.from_app!r}. Declared apps: {sorted(known)!r}",
         )
 
 
@@ -708,7 +828,9 @@ __all__ = (
     "CommandArg",
     "CommandShortcut",
     "DepSpec",
+    "ExportModel",
     "HooksOverride",
+    "HostBridgeSpec",
     "MountModel",
     "NameList",
     "NameStr",

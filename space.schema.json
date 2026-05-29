@@ -599,6 +599,82 @@
       "title": "ExecuteMode",
       "type": "string"
     },
+    "ExportModel": {
+      "additionalProperties": false,
+      "description": "One ``exports[<name>]`` entry.\n\nMaterialises a directory built inside a container (typically living in a\nnamed volume — ``node_modules``, optionally ``.venv``) onto the host so\nIDEs that only resolve from the local filesystem see it.\n\nExport is for IDE indexing, NOT for running host tooling: the exported\ntree may carry native binaries built for the image's libc, not the host's.\n\nAttributes:\n    from_app: the app (single) whose service owns the source directory.\n    exec_path: absolute POSIX source path inside the container.\n    path: host destination path (``${VAR}`` references resolved in scope).\n    strategy: ``sync`` (default — keep the named volume, copy to host on\n        ``refresh_on``) or ``bind-seeded`` (turn ``exec_path`` into a host\n        bind seeded from the image).\n    refresh_on: lifecycle events that trigger a refresh (default\n        ``[build]``).\n    gitignore: when True (default), add ``path`` to the root ``.gitignore``.\n    mac_volume: optional macOS volume consistency hint.\n    rewrite_paths: experimental — rewrite absolute container paths inside\n        exported files to their host equivalents on sync (for editable\n        ``.venv`` installs). Off by default; see ``E034``.",
+      "properties": {
+        "from": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
+          "title": "From",
+          "type": "string"
+        },
+        "exec_path": {
+          "title": "Exec Path",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "strategy": {
+          "$ref": "#/$defs/ExportStrategy",
+          "default": "sync"
+        },
+        "refresh_on": {
+          "title": "Refresh On",
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/RefreshHook"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "gitignore": {
+          "default": true,
+          "title": "Gitignore",
+          "type": "boolean"
+        },
+        "mac_volume": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MacVolumeMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "rewrite_paths": {
+          "default": false,
+          "title": "Rewrite Paths",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "exec_path",
+        "path"
+      ],
+      "title": "ExportModel",
+      "type": "object"
+    },
+    "ExportStrategy": {
+      "description": "Materialisation strategy for an ``exports[*]`` entry.\n\n``BIND_SEEDED`` turns the service's ``exec_path`` into a host bind seeded\nfrom the image (the container then writes directly to the host — always\nlive). ``SYNC`` keeps the named volume for container I/O and copies it to\nthe host one-way on ``refresh_on`` events (a read-mostly mirror for IDE\nindexing).",
+      "enum": [
+        "bind-seeded",
+        "sync"
+      ],
+      "title": "ExportStrategy",
+      "type": "string"
+    },
     "HooksOverride": {
       "additionalProperties": false,
       "description": "Per-target hook overrides used by ``cupli set-hooks``.\n\nAttributes:\n    service: docker-compose service to exec into (default: target's service).\n    working_dir: working directory inside the container.\n    enabled: whether to install shims for this target.",
@@ -636,6 +712,31 @@
       "title": "HooksOverride",
       "type": "object"
     },
+    "HostBridgeSpec": {
+      "additionalProperties": false,
+      "description": "Expanded form of a mount's ``host_bridge`` declaration.\n\nUsed when the auto-derived host link (``<bind-source> + (exec_path −\nbind-target)``) is not what you want, or to opt out of relative symlinks.\n\nAttributes:\n    link: explicit host path for the bridge symlink. Overrides the\n        auto-derived link. ``${VAR}`` references are resolved in the\n        mount's scope. When ``None``, cupli derives the link from the\n        hosting app's workdir bind.\n    relative: when True (default), create a relative symlink so the\n        workspace stays portable across machines.",
+      "properties": {
+        "link": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Link"
+        },
+        "relative": {
+          "default": true,
+          "title": "Relative",
+          "type": "boolean"
+        }
+      },
+      "title": "HostBridgeSpec",
+      "type": "object"
+    },
     "MacVolumeMode": {
       "description": "macOS-specific volume consistency mode for performance tuning.",
       "enum": [
@@ -657,7 +758,7 @@
     },
     "MountModel": {
       "additionalProperties": false,
-      "description": "One ``mounts[<name>]`` entry.\n\nAttributes:\n    hosted_in: app names whose containers receive the mount.\n    exec_path: absolute POSIX path inside the container.\n    mode: read-write or read-only bind-mount.\n    mac_volume: optional macOS volume consistency hint.",
+      "description": "One ``mounts[<name>]`` entry.\n\nAttributes:\n    hosted_in: app names whose containers receive the mount.\n    exec_path: absolute POSIX path inside the container.\n    mode: read-write or read-only bind-mount.\n    mac_volume: optional macOS volume consistency hint.\n    host_bridge: opt-in host symlink so host tooling (IDEs, workspace\n        resolvers) sees the mount at the same relative path the container\n        uses. ``true`` enables auto-derivation; a mapping is a\n        :class:`HostBridgeSpec` for overrides. ``false`` (default) is off.",
       "properties": {
         "path": {
           "anyOf": [
@@ -771,6 +872,18 @@
             }
           ],
           "default": null
+        },
+        "host_bridge": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/$defs/HostBridgeSpec"
+            }
+          ],
+          "default": false,
+          "title": "Host Bridge"
         }
       },
       "required": [
@@ -779,6 +892,16 @@
       ],
       "title": "MountModel",
       "type": "object"
+    },
+    "RefreshHook": {
+      "description": "Lifecycle event after which an export is refreshed.\n\nListed in ``exports[*].refresh_on``. cupli re-materialises the export for\nthe affected ``from`` service after the matching operation completes.",
+      "enum": [
+        "up",
+        "build",
+        "restart"
+      ],
+      "title": "RefreshHook",
+      "type": "string"
     },
     "ServiceMode": {
       "description": "Run mode declared on ``apps[*].mode``.",
@@ -1670,6 +1793,19 @@
         "minLength": 1
       },
       "title": "Configs",
+      "type": "object"
+    },
+    "exports": {
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_-]*$": {
+          "$ref": "#/$defs/ExportModel"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+      },
+      "title": "Exports",
       "type": "object"
     }
   },

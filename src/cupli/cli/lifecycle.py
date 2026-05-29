@@ -64,6 +64,20 @@ def _verb_services(resolved, plan, names: list[str]) -> list[str]:
     return list(plan.services)
 
 
+def _host_pre_up(resolved, plan) -> None:
+    """Seed bind-seeded exports before ``up`` (no-op without exports)."""
+    from cupli.services.host_sync import pre_up
+
+    pre_up(resolved, plan)
+
+
+def _host_post(resolved, plan, event: str, service_names: list[str]) -> None:
+    """Refresh exports/bridges after a lifecycle op (no-op when not applicable)."""
+    from cupli.services.host_sync import post_event
+
+    post_event(resolved, plan, event, service_names)
+
+
 def _parse_mode(raw: str | None) -> DepMode | None:
     """Coerce a CLI ``--mode`` value to a :class:`DepMode`."""
     if raw is None:
@@ -96,7 +110,8 @@ def up_command(
 ) -> None:
     """Bring services up (``docker compose up``). Unknown flags pass through."""
     flags, names = _compose_passthrough(ctx, services)
-    _, plan = _plan(ctx, names, tag or [], _parse_mode(mode))
+    resolved, plan = _plan(ctx, names, tag or [], _parse_mode(mode))
+    _host_pre_up(resolved, plan)
     args = ["up"]
     if detach:
         args.append("-d")
@@ -106,6 +121,7 @@ def up_command(
     args.extend(flags)
     args.extend(plan.services)
     invoke(plan, args)
+    _host_post(resolved, plan, "up", list(plan.services))
 
 
 @suppress_known_exceptions
@@ -154,9 +170,12 @@ def restart_command(
     targets = _verb_services(resolved, plan, names)
     if hard:
         invoke(plan, ["down", "--remove-orphans", *targets])
+        _host_pre_up(resolved, plan)
         invoke(plan, ["up", "-d", *flags, *plan.services])
+        _host_post(resolved, plan, "restart", targets)
         return
     invoke(plan, ["restart", *flags, *targets])
+    _host_post(resolved, plan, "restart", targets)
 
 
 @suppress_known_exceptions
@@ -251,8 +270,10 @@ def build_command(
     if pull:
         args.append("--pull")
     args.extend(flags)
-    args.extend(_verb_services(resolved, plan, names))
+    targets = _verb_services(resolved, plan, names)
+    args.extend(targets)
     invoke(plan, args)
+    _host_post(resolved, plan, "build", targets)
 
 
 @suppress_known_exceptions
