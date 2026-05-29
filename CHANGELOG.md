@@ -1,3 +1,31 @@
+# v0.6.3
+
+Patch release. Two fixes from a fresh-clone deploy of the `exports` /
+`host_bridge` features.
+
+## Fixes
+
+* **`bind-seeded` exports reinstalled dependencies at runtime instead of
+  copying from the image.** On an empty host the bind started empty, so the
+  container ran a slow, network-bound `pnpm` / `uv install` (hanging on
+  `ETIMEDOUT` in a restricted network). Two causes: the source image/volume
+  were resolved against *every* service in the merged compose (so an unrelated
+  app's image could win — e.g. a Python `core-back` image used to seed a JS
+  `node_modules` export), and on a fresh `cupli up --build` the image was not
+  built yet when the seed ran. Source resolution is now scoped to the export's
+  `from` app's compose service(s), and `cupli up` builds first (as a separate
+  step) so the seed copies real content from the image — an offline
+  `docker cp`-style copy of `exec_path`, never a package install. `cupli up
+  --build` therefore no longer forwards `--build` to the `up` step.
+
+* **A fresh `cupli up` raced docker's named-volume initialisation when several
+  services of an app shared one volume** (`failed to mkdir …/_data/…: file
+  exists`), so the first deploy failed and needed a manual retry. Before `up`,
+  cupli now pre-initialises each named volume shared by two or more services
+  once, serially (building any missing image first). This is a no-op once the
+  volume exists and is gated so spaces without compound apps / exports pay
+  nothing.
+
 # v0.6.2
 
 Patch release. Seven fixes from the second real-world run of the `exports` /
