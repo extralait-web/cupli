@@ -130,3 +130,17 @@ def test_mounts_list_shows_bridge_column(runner: CliRunner, tmp_path: Path, isol
     result = runner.invoke(app, ["-f", str(space), "mounts", "list"])
     assert result.exit_code == 0, result.stdout
     assert "bridge" in result.stdout
+
+
+@needs_symlinks
+def test_mounts_bridge_exits_nonzero_on_conflict(runner: CliRunner, tmp_path: Path, isolated_registry: Path) -> None:
+    """A conflicting link path makes ``mounts bridge`` exit non-zero with E032 (Bug 2)."""
+    _ = isolated_registry
+    space = _space_with_bridge(tmp_path)
+    link = tmp_path / "src/apps/web/packages/ui"
+    link.mkdir(parents=True)
+    (link / "keep.txt").write_text("mine", encoding="utf-8")  # non-empty → conflict
+    result = runner.invoke(app, ["-f", str(space), "mounts", "bridge"])
+    assert result.exit_code == 1, result.stdout
+    assert "E032" in result.stdout
+    assert (link / "keep.txt").read_text(encoding="utf-8") == "mine"

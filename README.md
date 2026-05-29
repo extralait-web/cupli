@@ -202,8 +202,8 @@ They compose: pnpm's relative symlinks inside an exported `node_modules`
 `packages/<lib>` is bridged. There's an asymmetry between stacks — a JS remote
 (Docker) interpreter does **not** resolve dependencies, so `node_modules` must
 exist on the host; a Python remote interpreter resolves fine, so prefer it over
-exporting `.venv`. See the [`exports.<name>`](#exportsname) reference for
-fields.
+exporting `.venv` (a `.venv` export is skipped unless `rewrite_paths: true`).
+See the [`exports.<name>`](#exportsname) reference for fields.
 
 ### Service
 
@@ -371,7 +371,7 @@ exported native binaries may target the image's libc, not the host's.
 | `refresh_on` | list[enum] \| string | `[build]` | Lifecycle events that re-materialise the export: `up`, `build`, `restart`. |
 | `gitignore` | bool | `true` | Add `path` to the root `.gitignore` (under a `# cupli exports` section). |
 | `mac_volume` | enum | — | macOS volume consistency hint. |
-| `rewrite_paths` | bool | `false` | Experimental: rewrite absolute container paths in exported files to host equivalents (for editable `.venv` installs). See `E034`. |
+| `rewrite_paths` | bool | `false` | Experimental: sync a `.venv`-like export anyway and rewrite absolute container paths (`/app/...`) in `.pth` / `.egg-link` files to host equivalents. Without it, a `.venv`-like export is skipped (`E034`). |
 
 ### `commands.<name>`
 

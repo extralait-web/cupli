@@ -82,14 +82,16 @@ def _refresh_exports(resolved: ResolvedSpace, event: str, service_names: Sequenc
 
 
 def _refresh_bridges(resolved: ResolvedSpace, config: dict | None) -> None:
-    """Create/repair host_bridge symlinks; never block the lifecycle on failure."""
-    from cupli.domain.errors import CupliError
+    """Create/repair host_bridge symlinks; never block the lifecycle.
+
+    ``bridge_mounts`` reports conflicts as results (it does not raise), so a
+    foreign object on one link path can't break ``cupli up``. Any unexpected
+    error is swallowed — bridges are a convenience, not a lifecycle gate.
+    """
     from cupli.services.bridge_service import bridge_mounts
 
     try:
         bridge_mounts(resolved, config=config)
-    except CupliError:
-        raise
     except Exception:
         return
 

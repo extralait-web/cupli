@@ -202,7 +202,8 @@ IDE индексируют **хостовую** ФС, тогда как cupli г
 только когда `packages/<lib>` тоже сбриджен. Есть асимметрия стеков — JS
 remote-интерпретатор (Docker) **не** резолвит зависимости, поэтому
 `node_modules` обязан быть на хосте; Python remote-интерпретатор резолвит
-нормально, так что экспортировать `.venv` не стоит. См. справку
+нормально, так что экспортировать `.venv` не стоит (экспорт `.venv`
+пропускается без `rewrite_paths: true`). См. справку
 [`exports.<name>`](#exportsname).
 
 ### Service
@@ -370,7 +371,7 @@ apps:
 | `refresh_on` | list[enum] \| string | `[build]` | Lifecycle-события для рематериализации: `up`, `build`, `restart`. |
 | `gitignore` | bool | `true` | Добавить `path` в корневой `.gitignore` (в секцию `# cupli exports`). |
 | `mac_volume` | enum | — | macOS volume consistency hint. |
-| `rewrite_paths` | bool | `false` | Experimental: переписывать абсолютные container-пути в экспортированных файлах на host-эквиваленты (для editable `.venv`-инсталлов). См. `E034`. |
+| `rewrite_paths` | bool | `false` | Experimental: синкнуть `.venv`-подобный экспорт и переписать абсолютные container-пути (`/app/...`) в `.pth` / `.egg-link` на host-эквиваленты. Без флага `.venv`-подобный экспорт пропускается (`E034`). |
 
 ### `commands.<name>`
 

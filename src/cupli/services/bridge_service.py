@@ -74,7 +74,10 @@ def derive_host_link(exec_path: str, binds: list[tuple[str, str]]) -> Path | Non
     """
     best: tuple[str, str] | None = None
     for source, target in binds:
-        if exec_path == target or exec_path.startswith(target.rstrip("/") + "/"):
+        # STRICT ancestor only: a bind whose target equals exec_path is the
+        # mount's own injected bind (cupli mounts the lib at exec_path), not the
+        # app's workdir bind — skip it, else `rel` is empty and derivation fails.
+        if exec_path.startswith(target.rstrip("/") + "/"):
             if best is None or len(target) > len(best[1]):
                 best = (source, target)
     if best is None:
@@ -106,10 +109,11 @@ def binds_for_services(config: dict, service_names: set[str]) -> list[tuple[str,
 def link_status(link: Path, target: Path) -> str:
     """Classify the on-disk state of a bridge link: ok/broken/empty/conflict/none.
 
-    ``empty`` is a real, empty directory on the link path — safe to remove and
-    replace with the symlink (docker / prior runs routinely leave empty
-    ``packages/<lib>`` mount points). ``conflict`` is a non-empty directory, a
-    file, or a foreign symlink — never touched.
+    ``empty`` is a reclaimable docker / prior-run stub on the link path — an
+    empty directory (e.g. ``packages/<lib>``) or a 0-byte regular file (e.g. a
+    ``mkdocs.yml`` sub-mount point the daemon created). Both are safe to remove
+    and replace with the symlink. ``conflict`` is a non-empty directory, a
+    non-empty file, or a foreign symlink — never touched.
     """
     if link.is_symlink():
         try:
@@ -119,7 +123,9 @@ def link_status(link: Path, target: Path) -> str:
         return "ok" if points_to == target.resolve() else "broken"
     if not link.exists():
         return "none"
-    if link.is_dir() and not any(link.iterdir()):
+    if link.is_dir():
+        return "empty" if not any(link.iterdir()) else "conflict"
+    if link.is_file() and link.stat().st_size == 0:
         return "empty"
     return "conflict"
 
@@ -146,15 +152,20 @@ def bridge_mounts(
     owned = _read_owned(resolved)
     results: list[BridgeResult] = []
     config_loaded = config is not None
-    for name in targets:
-        link = _explicit_link(resolved, name)
-        if link is None:
-            if not config_loaded:
-                config = _fetch_config(resolved, targets)
-                config_loaded = True
-            link = _derive_link(resolved, name, config)
-        results.append(_apply_bridge(resolved, name, link, owned))
-    _write_owned(resolved, owned)
+    try:
+        for name in targets:
+            link = _explicit_link(resolved, name)
+            if link is None:
+                if not config_loaded:
+                    config = _fetch_config(resolved, targets)
+                    config_loaded = True
+                link = _derive_link(resolved, name, config)
+            results.append(_apply_bridge(resolved, name, link, owned))
+    finally:
+        # Persist what was created even if a later mount fails — otherwise an
+        # already-created symlink is orphaned (untracked) and `unbridge` cannot
+        # remove it ("not cupli-owned").
+        _write_owned(resolved, owned)
     return results
 
 
@@ -225,7 +236,14 @@ def _explicit_link(resolved: ResolvedSpace, name: str) -> Path | None:
 
 
 def _derive_link(resolved: ResolvedSpace, name: str, config: dict | None) -> Path | None:
-    """Auto-derive a mount's bridge link from the hosting services' binds."""
+    """Auto-derive a mount's bridge link from its hosting services' workdir bind.
+
+    Scopes the bind search to the services of the mount's ``hosted_in`` apps —
+    NOT every service in the merged compose. Scanning all services would let an
+    unrelated app's ``/app`` bind win when several apps each bind their own
+    directory to the same container path, producing a host link under the wrong
+    app's checkout.
+    """
     if config is None:
         return None
     from cupli.services.compose_service import _managed_services
@@ -236,12 +254,6 @@ def _derive_link(resolved: ResolvedSpace, name: str, config: dict | None) -> Pat
         service_names.update(_managed_services(resolved, app))
     exec_path = resolved.mounts[name].vars["MOUNT_EXEC_PATH"]
     link = derive_host_link(exec_path, binds_for_services(config, service_names))
-    if link is None:
-        # Fallback: the app's compose service may be named differently from the
-        # app (external `composes:`), so the guessed names miss its workdir bind.
-        # Scan every service's binds — the longest-ancestor match still wins.
-        all_services = set((config.get("services") or {}).keys())
-        link = derive_host_link(exec_path, binds_for_services(config, all_services))
     return Path(os.path.abspath(link)) if link is not None else None
 
 
@@ -274,10 +286,11 @@ def _apply_bridge(resolved: ResolvedSpace, name: str, link: Path | None, owned: 
         owned[name] = str(link)
         return BridgeResult(name=name, link=link, target=target, status="ok")
     if status == "conflict":
-        from cupli.domain.errors import CupliError
-
-        raise CupliError(
-            "E032", kind="bridge", name=name, path=str(link), what="non-empty dir, file, or foreign symlink"
+        # Report as a result, not a raised error: one conflicting mount must not
+        # abort the whole batch (orphaning symlinks created earlier in the loop)
+        # nor break `cupli up`. The CLI surfaces a non-zero exit on conflicts.
+        return BridgeResult(
+            name=name, link=link, target=target, status="conflict", detail="non-empty dir, file, or foreign symlink"
         )
     action = "repaired" if status == "broken" else "created"
     try:
@@ -292,16 +305,19 @@ def _apply_bridge(resolved: ResolvedSpace, name: str, link: Path | None, owned: 
 
 
 def _write_symlink(link: Path, target: Path, *, relative: bool) -> None:
-    """Create (or replace a stale symlink / empty dir) ``link → target``.
+    """Create (or replace a stale symlink / empty stub) ``link → target``.
 
-    A stale symlink is unlinked; an empty directory left by docker or a prior
-    run is removed. The caller (:func:`_apply_bridge`) only reaches here for the
-    ``none`` / ``broken`` / ``empty`` states, so removing the empty dir is safe.
+    A stale symlink is unlinked; an empty directory or 0-byte file stub left by
+    docker or a prior run is removed. The caller (:func:`_apply_bridge`) only
+    reaches here for the ``none`` / ``broken`` / ``empty`` states, so removing
+    the stub is safe.
     """
     if link.is_symlink():
         link.unlink()
-    elif link.exists():
+    elif link.is_dir():
         link.rmdir()
+    elif link.exists():
+        link.unlink()
     create_dir(link.parent)
     dest = os.path.relpath(target, start=link.parent) if relative else str(target)
     os.symlink(dest, link)

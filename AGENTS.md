@@ -340,10 +340,14 @@ mounts:
   `cupli mounts detach`. Run explicitly with `cupli mounts bridge [names…]` /
   `cupli mounts unbridge [names…]`.
 - cupli only touches symlinks it created (tracked in `state/bridges.json`).
-  An empty directory on the link path (left by docker / a prior run) is
-  reclaimed; a non-empty dir, a file, or a foreign symlink is left alone (`E032`).
-- Auto-derivation reads `docker compose config` for the workdir bind; an
-  explicit `link:` works offline and is exposed as `${<MOUNT>_BRIDGE_PATH}`.
+  An empty directory or a 0-byte file stub on the link path (left by docker /
+  a prior run) is reclaimed; a non-empty dir, a non-empty file, or a foreign
+  symlink is left alone (`E032`, reported per-mount — one conflict never aborts
+  the batch or `cupli up`).
+- `host_bridge: true` auto-derives the link from the hosting app's workdir bind
+  (`docker compose config`), scoped to that app's compose service(s) — so it
+  works without an explicit `link:` in the common case. An explicit `link:`
+  works offline and is exposed as `${<MOUNT>_BRIDGE_PATH}`.
 - `cupli mounts list` shows a `bridge` column (`none`/`pending`/`ok`/
   `broken`/`conflict`).
 
@@ -382,9 +386,11 @@ exports:
   (`@scope/<lib> → ../../packages/<lib>`) resolve on the host only when
   `packages/<lib>` is bridged too.
 - **`.venv` caveat:** a Python remote (Docker Compose) interpreter resolves
-  fine, so prefer it. Exporting `.venv` warns `E034` because editable installs
-  write absolute container paths; opt in with `rewrite_paths: true`
-  (experimental).
+  fine, so prefer it. A `.venv`-like export is **skipped** (`E034`) unless
+  `rewrite_paths: true` is set — editable installs write absolute container
+  paths (`/app/...`) that don't exist on the host, so a naive sync is useless.
+  `rewrite_paths: true` (experimental) syncs and rewrites the workdir prefix
+  (`/app/...` → the app's host path) in `.pth` / `.egg-link` files.
 
 ### "Add a top-level command for linting"
 
@@ -551,7 +557,7 @@ E002 Validation failed
 | `E031` | Planned service not declared anywhere. | Either add it to a compose-fragment listed under `composes:` (and run `cupli space sync` if the repo isn't cloned yet), or supply at least one inline compose field (e.g. `image:`) under `service:` / `services.<name>`. |
 | `E032` | Host path for a bridge/export holds a non-empty dir, a file, or a foreign symlink. | Move/remove it, or `cupli exports clean` / `cupli mounts unbridge` if cupli made it. (Empty dirs are reclaimed automatically; cupli never overwrites non-empty/foreign objects.) |
 | `E033` | Could not chown a materialised export to the host user. | Fix permissions on the host path (no root-owned parents from an earlier docker run), then re-sync. |
-| `E034` | Exporting a `.venv`-like path with editable installs (absolute container paths). | Prefer a remote Python interpreter; or set `rewrite_paths: true` (experimental) to export anyway. |
+| `E034` | A `.venv`-like export is skipped (editable installs carry absolute container paths). | Prefer a remote Python interpreter; or set `rewrite_paths: true` (experimental) to sync and rewrite those paths. |
 
 ---
 

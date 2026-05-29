@@ -73,3 +73,13 @@ def test_exports_sync_without_docker_reports_missing(
     result = runner.invoke(app, ["-f", str(space), "exports", "sync"])
     assert result.exit_code == 0, result.stdout
     assert "web-nm" in result.stdout
+
+
+def test_graph_shows_exports_section(runner: CliRunner, tmp_path: Path, isolated_registry: Path) -> None:
+    """``cupli graph`` lists declared exports (Bug 7)."""
+    _ = isolated_registry
+    space = _space_with_export(tmp_path)
+    result = runner.invoke(app, ["-f", str(space), "graph"])
+    assert result.exit_code == 0, result.stdout
+    assert "exports" in result.stdout
+    assert "web-nm" in result.stdout

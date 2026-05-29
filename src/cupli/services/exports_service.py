@@ -145,7 +145,14 @@ def _sync_one(resolved: ResolvedSpace, name: str, config: dict | None, state: di
     export = resolved.space.exports[name]
     path = resolved.exports[name].path
     exec_path = resolved.exports[name].vars["EXPORT_EXEC_PATH"]
-    _warn_editable(name, exec_path, rewrite_paths=export.rewrite_paths)
+    if _is_editable_venv(exec_path) and not export.rewrite_paths:
+        # A naive `.venv` export carries editable `.pth` files with absolute
+        # container paths (`/app/...`) that do not exist on the host — a broken
+        # resolve. Skip rather than materialise garbage; `rewrite_paths: true`
+        # opts in (and rewrites those paths). Prefer a remote Python interpreter.
+        spec = CupliError("E034", name=name, exec_path=exec_path)
+        warn(f"{spec.args[0]}\n  {spec.hint}\n  skipping {name!r} — set `rewrite_paths: true` to export anyway")
+        return ExportInfo(name, export.from_app, exec_path, path, export.strategy.value, "skipped")
     _guard_foreign_path(name, path, state)
     if export.gitignore:
         ensure_gitignore(resolved.space_dir, [path])
@@ -153,6 +160,8 @@ def _sync_one(resolved: ResolvedSpace, name: str, config: dict | None, state: di
         status = _seed_bind(name, export.from_app, exec_path, path, config)
     else:
         status = _sync_volume(name, export.from_app, exec_path, path, config)
+    if export.rewrite_paths and status in {"synced", "seeded"}:
+        _rewrite_container_paths(resolved, export.from_app, exec_path, path, config)
     state.setdefault(name, {}).update({"status": status, "path": str(path), "strategy": export.strategy.value})
     return ExportInfo(name, export.from_app, exec_path, path, export.strategy.value, status)
 
@@ -171,10 +180,13 @@ def clean_exports(resolved: ResolvedSpace, names: list[str] | None = None) -> li
             warn(f"export {name!r} is bind-seeded — host data is the live bind; not removing {path}")
             status = "seeded"
         else:
-            if path.exists():
+            existed = path.exists()
+            if existed:
                 shutil.rmtree(path)
+            if export.gitignore:
+                remove_from_gitignore(resolved.space_dir, [path])
             state.pop(name, None)
-            status = "missing"
+            status = "removed" if existed else "missing"
         rows.append(
             ExportInfo(
                 name,
@@ -244,6 +256,38 @@ def ensure_gitignore(space_dir: Path, paths: list[Path]) -> None:
         lines.append(section)
     lines.extend(missing)
     gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def remove_from_gitignore(space_dir: Path, paths: list[Path]) -> None:
+    """Drop ``paths`` from the root ``.gitignore`` ``# cupli exports`` section.
+
+    Removes the matching entries; if the section is left empty its header (and a
+    single trailing blank line) is dropped too, so ``clean`` / a ``path:`` change
+    does not leave stale ignores behind.
+    """
+    section = "# cupli exports"
+    gitignore = space_dir / ".gitignore"
+    if not gitignore.exists():
+        return
+    drop = {_gitignore_entry(space_dir, path) for path in paths}
+    lines = gitignore.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines if line not in drop]
+    kept = _prune_empty_section(kept, section)
+    gitignore.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+
+
+def _prune_empty_section(lines: list[str], section: str) -> list[str]:
+    """Drop ``section`` (and one trailing blank) when no entries follow it."""
+    if section not in lines:
+        return lines
+    idx = lines.index(section)
+    following = [line for line in lines[idx + 1 :] if line.strip()]
+    if following:
+        return lines
+    end = idx + 1
+    if idx > 0 and not lines[idx - 1].strip():
+        idx -= 1  # also drop the blank separator before the header
+    return lines[:idx] + lines[end:]
 
 
 def _gitignore_entry(space_dir: Path, path: Path) -> str:
@@ -336,13 +380,50 @@ def _owner_str() -> str | None:
 # --- guards / helpers ------------------------------------------------------
 
 
-def _warn_editable(name: str, exec_path: str, *, rewrite_paths: bool) -> None:
-    """Warn (``E034``) when exporting a ``.venv``-like path without ``rewrite_paths``."""
-    if rewrite_paths:
+def _is_editable_venv(exec_path: str) -> bool:
+    """True when ``exec_path`` looks like a virtualenv (likely editable installs)."""
+    return Path(exec_path).name in _VENV_HINTS
+
+
+def _rewrite_container_paths(
+    resolved: ResolvedSpace, from_app: str, exec_path: str, host_path: Path, config: dict | None
+) -> None:
+    """Rewrite the container workdir prefix to the host app path in editable files.
+
+    Experimental (``rewrite_paths: true``). Editable installs write absolute
+    container paths (``/app/packages/<lib>/src``) into ``.pth`` / ``.egg-link``
+    files; on the host those resolve only after rewriting the workdir prefix
+    (``/app`` → the app's host directory). Best-effort: a no-op when the workdir
+    bind cannot be determined.
+    """
+    workdir = _container_workdir(resolved, from_app, exec_path, config)
+    if from_app not in resolved.apps or workdir is None:
+        warn(f"export rewrite_paths: cannot resolve container workdir for {from_app!r}; .pth left unchanged")
         return
-    if Path(exec_path).name in _VENV_HINTS:
-        spec = CupliError("E034", name=name, exec_path=exec_path)
-        warn(f"{spec.args[0]}\n  {spec.hint}")
+    old = workdir.rstrip("/") + "/"
+    new = str(resolved.apps[from_app].path).rstrip("/") + "/"
+    for editable in [*host_path.rglob("*.pth"), *host_path.rglob("*.egg-link")]:
+        try:
+            text = editable.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if old in text:
+            editable.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def _container_workdir(resolved: ResolvedSpace, from_app: str, exec_path: str, config: dict | None) -> str | None:
+    """Return the container target of the bind that hosts ``from_app``'s workdir."""
+    from cupli.services.bridge_service import binds_for_services
+    from cupli.services.compose_service import _managed_services
+
+    if config is None or from_app not in resolved.apps:
+        return None
+    host_root = os.path.abspath(str(resolved.apps[from_app].path))
+    services = set(_managed_services(resolved, from_app)) | set(config.get("services") or {})
+    for source, target in binds_for_services(config, services):
+        if os.path.abspath(source) == host_root and exec_path.startswith(target.rstrip("/") + "/"):
+            return target
+    return None
 
 
 def _guard_foreign_path(name: str, path: Path, state: dict[str, dict]) -> None:
@@ -415,6 +496,7 @@ __all__ = (
     "list_exports",
     "mark_stale",
     "refresh_for_event",
+    "remove_from_gitignore",
     "service_image",
     "sync_exports",
     "volume_for_exec_path",

@@ -131,6 +131,7 @@ def mounts_bridge_command(
     ] = None,
 ) -> None:
     """Create or repair host_bridge symlinks for active mounts."""
+    from cupli.domain.errors import CupliError
     from cupli.services.bridge_service import bridge_mounts
 
     space_path = _resolve_space_path(ctx)
@@ -141,6 +142,12 @@ def mounts_bridge_command(
         return
     for res in results:
         console.print(f"{res.name}: {res.status}" + (f" ({res.detail})" if res.detail else ""))
+    conflicts = [res for res in results if res.status == "conflict"]
+    if conflicts:
+        # Other mounts are bridged regardless; surface the conflict(s) with a
+        # non-zero exit so the user fixes the occupied path.
+        first = conflicts[0]
+        raise CupliError("E032", kind="bridge", name=first.name, path=str(first.link), what=first.detail)
     success("bridges up to date.")
 
 

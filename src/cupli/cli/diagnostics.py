@@ -17,7 +17,7 @@ from cupli.utils.subprocess import run_command
 
 @suppress_known_exceptions
 def graph_command(ctx: typer.Context) -> None:
-    """Print a tree of bases / apps + deps + mounts for the current space."""
+    """Print a tree of bases / apps + deps + mounts + exports for the current space."""
     space_path = _resolve_space_path(ctx)
     resolved = load_space(space_path, strict_vars=_strict_vars(ctx))
 
@@ -46,6 +46,15 @@ def graph_command(ctx: typer.Context) -> None:
             mounts_node.add(
                 f"[white]{name}[/white] -> [green]{', '.join(mount.hosted_in)}[/green]"
                 f"  [dim]exec_path={mount.exec_path}[/dim]",
+            )
+    if resolved.space.exports:
+        exports_node = root.add("[bold]exports[/bold]")
+        for name in sorted(resolved.space.exports):
+            export = resolved.space.exports[name]
+            exports_node.add(
+                f"[white]{name}[/white] [dim]from[/dim] [green]{export.from_app}[/green]"
+                f"  [dim]{export.exec_path} -> {resolved.exports[name].path}"
+                f"  ({export.strategy.value})[/dim]",
             )
     if resolved.space.commands:
         cmd_node = root.add("[bold]commands[/bold]")

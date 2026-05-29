@@ -157,7 +157,7 @@ def test_clean_removes_sync_host_copy(tmp_path: Path, monkeypatch: pytest.Monkey
     host = resolved.exports["web-nm"].path
     assert host.exists()
     rows = es.clean_exports(resolved)
-    assert rows[0].status == "missing"
+    assert rows[0].status == "removed"
     assert not host.exists()
 
 
@@ -182,3 +182,94 @@ def test_sync_writes_gitignore_when_enabled(tmp_path: Path, monkeypatch: pytest.
     es.sync_exports(resolved, config=_CONFIG)
     gitignore = (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "/src/apps/web/node_modules" in gitignore
+
+
+def test_remove_from_gitignore_prunes_entry_and_empty_section(tmp_path: Path) -> None:
+    """``remove_from_gitignore`` drops the entry and an emptied cupli section (Bug 6)."""
+    target = tmp_path / "src/apps/web/node_modules"
+    (tmp_path / ".gitignore").write_text("node\n*.log\n", encoding="utf-8")
+    es.ensure_gitignore(tmp_path, [target])
+    es.remove_from_gitignore(tmp_path, [target])
+    content = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "/src/apps/web/node_modules" not in content
+    assert "# cupli exports" not in content  # section pruned once empty
+    assert "node" in content and "*.log" in content  # user lines preserved
+
+
+def test_clean_prunes_gitignore_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``clean_exports`` removes the export's .gitignore entry (Bug 6)."""
+    resolved = _load(tmp_path)
+    monkeypatch.setattr(es, "_docker_sync", lambda v, i, p: bool((p / "x").mkdir(exist_ok=True)) or True)
+    es.sync_exports(resolved, config=_CONFIG)
+    assert "/src/apps/web/node_modules" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    es.clean_exports(resolved)
+    assert "/src/apps/web/node_modules" not in (tmp_path / ".gitignore").read_text(encoding="utf-8")
+
+
+# --- .venv editable handling (Bug 4) ---------------------------------------
+
+
+def _venv_space(tmp_path: Path, *, rewrite: bool) -> Path:
+    space_file = tmp_path / "space.cupli.yaml"
+    space_file.write_text(
+        "name: demo\n"
+        "apps:\n"
+        "  api:\n"
+        "    path: ${SPACE_PATH}/src/api\n"
+        "exports:\n"
+        "  venv:\n"
+        "    from: api\n"
+        "    exec_path: /app/.venv\n"
+        "    path: ${API_APP_PATH}/.venv\n"
+        f"    rewrite_paths: {'true' if rewrite else 'false'}\n",
+        encoding="utf-8",
+    )
+    return space_file
+
+
+def _venv_config() -> dict:
+    return {
+        "services": {
+            "api": {
+                "image": "demo-api:latest",
+                "volumes": [
+                    {"type": "bind", "source": "<APIPATH>", "target": "/app"},
+                    {"type": "volume", "source": "venv", "target": "/app/.venv"},
+                ],
+            }
+        },
+        "volumes": {"venv": {"name": "demo_venv"}},
+    }
+
+
+def test_venv_export_skipped_without_rewrite_paths(tmp_path: Path) -> None:
+    """`.venv` export without ``rewrite_paths`` is skipped, not synced (Bug 4)."""
+    from cupli.core.loader import load_space
+
+    resolved = load_space(_venv_space(tmp_path, rewrite=False), auto_register=False, auto_cache=False)
+    rows = es.sync_exports(resolved, config=_venv_config())
+    assert rows[0].status == "skipped"
+    assert not resolved.exports["venv"].path.exists()
+
+
+def test_venv_rewrite_paths_rewrites_pth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``rewrite_paths: true``, container paths in `.pth` become host paths (Bug 4)."""
+    from cupli.core.loader import load_space
+
+    resolved = load_space(_venv_space(tmp_path, rewrite=True), auto_register=False, auto_cache=False)
+    api_path = resolved.apps["api"].path
+
+    def fake_sync(volume: str, image: str, host_path) -> bool:
+        pth_dir = host_path / "lib/python3.13/site-packages"
+        pth_dir.mkdir(parents=True, exist_ok=True)
+        (pth_dir / "lib.pth").write_text("/app/packages/lib/src\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(es, "_docker_sync", fake_sync)
+    config = _venv_config()
+    config["services"]["api"]["volumes"][0]["source"] = str(api_path)  # /app bind → api host path
+    es.sync_exports(resolved, config=config)
+    pth = resolved.exports["venv"].path / "lib/python3.13/site-packages/lib.pth"
+    content = pth.read_text(encoding="utf-8")
+    assert content.strip() == f"{api_path}/packages/lib/src"
+    assert "/app/" not in content

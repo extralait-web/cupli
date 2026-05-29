@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from cupli.domain.errors import CupliError
 from cupli.services import bridge_service as bs
 
 
@@ -43,6 +42,18 @@ def test_derive_host_link_picks_longest_ancestor_bind() -> None:
 def test_derive_host_link_none_when_no_bind_contains_path() -> None:
     """A path outside every bind yields no host link."""
     assert bs.derive_host_link("/elsewhere", [("/h/app", "/app")]) is None
+
+
+def test_derive_host_link_ignores_mounts_own_bind() -> None:
+    """A bind whose target == exec_path (the mount's own injected bind) is skipped (Bug 1)."""
+    # The app workdir bind (/app) plus the mount's own bind at exec_path; the
+    # latter must not win, else `rel` is empty and derivation returns None.
+    link = bs.derive_host_link(
+        "/app/packages/lib",
+        [("/h/app", "/app"), ("/h/mounts/lib", "/app/packages/lib")],
+    )
+    assert link is not None
+    assert link.as_posix() == "/h/app/packages/lib"
 
 
 def test_binds_for_services_only_bind_volumes_of_named_services() -> None:
@@ -121,16 +132,51 @@ def test_bridge_repairs_broken_symlink(tmp_path: Path) -> None:
     assert (link.parent / link.readlink()).resolve() == (tmp_path / "src/mounts/ui-lib").resolve()
 
 
-def test_bridge_conflict_on_nonempty_dir_raises_e032(tmp_path: Path) -> None:
-    """A non-empty (non-symlink) directory on the link path is never overwritten."""
+def test_bridge_conflict_on_nonempty_dir_is_reported_not_raised(tmp_path: Path) -> None:
+    """A non-empty directory yields a ``conflict`` result (not a raised error) and is untouched."""
     resolved = _load(tmp_path)
     link = tmp_path / "src/apps/web/packages/ui"
     link.mkdir(parents=True)
     (link / "file.txt").write_text("keep me", encoding="utf-8")
-    with pytest.raises(CupliError) as exc:
-        bs.bridge_mounts(resolved)
-    assert exc.value.code == "E032"
+    results = bs.bridge_mounts(resolved)
+    assert [r.status for r in results] == ["conflict"]
+    assert not link.is_symlink()
     assert (link / "file.txt").read_text(encoding="utf-8") == "keep me"
+
+
+def test_bridge_conflict_does_not_orphan_earlier_symlink(tmp_path: Path) -> None:
+    """A later conflicting mount must not lose the ownership record of an earlier one (Bug 2)."""
+    space_file = tmp_path / "space.cupli.yaml"
+    space_file.write_text(
+        "name: demo\n"
+        "apps:\n"
+        "  web: {}\n"
+        "mounts:\n"
+        "  good:\n"
+        "    hosted_in: [web]\n"
+        "    path: ${MOUNTS_PATH}/good\n"
+        "    exec_path: /app/packages/good\n"
+        "    host_bridge:\n"
+        "      link: ${WEB_APP_PATH}/packages/good\n"
+        "  bad:\n"
+        "    hosted_in: [web]\n"
+        "    path: ${MOUNTS_PATH}/bad\n"
+        "    exec_path: /app/packages/bad\n"
+        "    host_bridge:\n"
+        "      link: ${WEB_APP_PATH}/packages/bad\n",
+        encoding="utf-8",
+    )
+    from cupli.core.loader import load_space
+
+    resolved = load_space(space_file, auto_register=False, auto_cache=False)
+    bad_link = tmp_path / "src/apps/web/packages/bad"
+    bad_link.mkdir(parents=True)
+    (bad_link / "keep").write_text("x", encoding="utf-8")  # forces a conflict on `bad`
+    bs.bridge_mounts(resolved)
+    # `good` was created and must remain cupli-owned despite `bad` conflicting.
+    removed = {r.name: r.status for r in bs.unbridge_mounts(resolved, ["good"])}
+    assert removed["good"] == "removed"
+    assert not (tmp_path / "src/apps/web/packages/good").exists()
 
 
 @needs_symlinks
@@ -146,7 +192,7 @@ def test_bridge_replaces_empty_dir_without_e032(tmp_path: Path) -> None:
 
 
 def test_link_status_classifies_empty_vs_conflict(tmp_path: Path) -> None:
-    """``link_status`` distinguishes an empty dir (removable) from a non-empty one."""
+    """``link_status`` distinguishes reclaimable stubs from real content."""
     target = tmp_path / "target"
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -155,6 +201,40 @@ def test_link_status_classifies_empty_vs_conflict(tmp_path: Path) -> None:
     nonempty.mkdir()
     (nonempty / "f").write_text("x", encoding="utf-8")
     assert bs.link_status(nonempty, target) == "conflict"
+    zero_file = tmp_path / "stub.yml"
+    zero_file.touch()  # 0-byte docker mount-point stub
+    assert bs.link_status(zero_file, target) == "empty"
+    real_file = tmp_path / "real.yml"
+    real_file.write_text("data", encoding="utf-8")
+    assert bs.link_status(real_file, target) == "conflict"
+
+
+@needs_symlinks
+def test_bridge_replaces_zero_byte_file_stub(tmp_path: Path) -> None:
+    """A 0-byte file stub (docker mount-point, e.g. mkdocs.yml) is replaced by a symlink (Bug 3b)."""
+    space_file = tmp_path / "space.cupli.yaml"
+    space_file.write_text(
+        "name: demo\n"
+        "apps:\n"
+        "  web: {}\n"
+        "mounts:\n"
+        "  cfg:\n"
+        "    hosted_in: [web]\n"
+        "    path: ${MOUNTS_PATH}/cfg.yml\n"
+        "    exec_path: /app/cfg.yml\n"
+        "    host_bridge:\n"
+        "      link: ${WEB_APP_PATH}/cfg.yml\n",
+        encoding="utf-8",
+    )
+    from cupli.core.loader import load_space
+
+    resolved = load_space(space_file, auto_register=False, auto_cache=False)
+    stub = tmp_path / "src/apps/web/cfg.yml"
+    stub.parent.mkdir(parents=True)
+    stub.touch()  # 0-byte stub left by the docker daemon
+    results = bs.bridge_mounts(resolved)
+    assert [r.status for r in results] == ["created"]
+    assert stub.is_symlink()
 
 
 @needs_symlinks
@@ -181,13 +261,14 @@ def test_bridge_info_reports_pending_then_ok(tmp_path: Path) -> None:
 
 
 @needs_symlinks
-def test_bridge_auto_derive_falls_back_to_all_services(tmp_path: Path) -> None:
-    """Auto-derivation finds the workdir bind even under a differently-named service (Bug 3b)."""
+def test_bridge_auto_derive_uses_hosting_app_bind_only(tmp_path: Path) -> None:
+    """Auto-derivation uses the hosting app's workdir bind, not another app's /app bind (Bug 1)."""
     space_file = tmp_path / "space.cupli.yaml"
     space_file.write_text(
         "name: demo\n"
         "apps:\n"
         "  web: {}\n"
+        "  api: {}\n"
         "mounts:\n"
         "  ui:\n"
         "    hosted_in: [web]\n"
@@ -199,14 +280,20 @@ def test_bridge_auto_derive_falls_back_to_all_services(tmp_path: Path) -> None:
     from cupli.core.loader import load_space
 
     resolved = load_space(space_file, auto_register=False, auto_cache=False)
-    bind_source = str(tmp_path / "src/apps/web")
-    # The compose service is named `frontend`, not `web` — the guessed name misses it.
-    config = {"services": {"frontend": {"volumes": [{"type": "bind", "source": bind_source, "target": "/app"}]}}}
+    web_src = str(tmp_path / "src/apps/web")
+    api_src = str(tmp_path / "src/apps/api")
+    # Both apps bind their own dir to /app; the link must land under web (the host).
+    config = {
+        "services": {
+            "web": {"volumes": [{"type": "bind", "source": web_src, "target": "/app"}]},
+            "api": {"volumes": [{"type": "bind", "source": api_src, "target": "/app"}]},
+        }
+    }
     results = bs.bridge_mounts(resolved, config=config)
     assert [r.status for r in results] == ["created"]
     link = tmp_path / "src/apps/web/packages/ui"
     assert link.is_symlink()
-    assert (link.parent / link.readlink()).resolve() == (tmp_path / "src/mounts/ui-lib").resolve()
+    assert "src/apps/api" not in str(link.parent / link.readlink())
 
 
 def test_bridge_skipped_when_mount_detached(tmp_path: Path) -> None:
